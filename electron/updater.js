@@ -27,6 +27,7 @@
 const { execFile } = require("child_process");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 
 const PKG = "@agegr/pi-web";
 // Bundled inside @agegr/pi-web; surfaced in the update CTA so the result names
@@ -74,6 +75,14 @@ function runNpm(ctx, args, opts = {}) {
           // Make sure any child node/npx the install spawns resolves to bundled node.
           PATH: ctx.nodeDir + path.delimiter + (process.env.PATH || ""),
           npm_config_yes: "true",
+          // When the Windows user-profile path contains non-ASCII characters
+          // (e.g. Chinese usernames with parentheses), npm's default cache
+          // under %LOCALAPPDATA% hits EPERM on temp-file operations.  Redirect
+          // the cache to a path under os.tmpdir() — on Windows this resolves
+          // through the 8.3 short name, sidestepping the encoding issue, and
+          // it is always writable even when the runtime dir lives under the
+          // read-only Program Files tree.
+          npm_config_cache: path.join(os.tmpdir(), "pi-npm-cache"),
         },
       },
       (err, stdout, stderr) => {
