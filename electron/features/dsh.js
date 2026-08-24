@@ -241,7 +241,11 @@ function startServer(port) {
 
   serverProc = spawn(
     ctx.bundledNodeExe(),
-    [bin, "web", "--host", "127.0.0.1", "--port", String(port)],
+    // --no-open: this shell IS the client. Without it dsh also points the
+    // system default browser at the same server, so you get two windows —
+    // and the browser one keeps a live session against a server whose
+    // lifecycle is tied to the dsh window (closing that window kills it).
+    [bin, "web", "--host", "127.0.0.1", "--port", String(port), "--no-open"],
     {
       cwd: runtimeDir(),
       env: serverEnv(),
