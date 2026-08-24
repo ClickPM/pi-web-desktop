@@ -97,7 +97,7 @@ pi-web-desktop/
 3. **自己一把锁**。dsh 的运行时目录与 pi 的相互独立，更新/自愈各自串行，互不阻塞。
 4. **版本钉死，且没有自动更新**。`runtime-seed-dsh/package.json` 写的是精确版本而非 `^`：dsh 处于 developer preview，README 明说 rc 之间可能不兼容。pi-web 那套「启动后自动静默检查」**没有**接到 dsh 上，只有菜单 `检查 DeepSeek Harness 更新…` 会去查、并在确认后才装。
 
-> `updater.isNewer()` 原先在第一个 `-` 处截断版本号，`0.1.0-rc.5` 与 `0.1.0-rc.6` 会被判为相等。这对只发正式版的 pi-web 无害，但会让 dsh **永远检查不到更新**（它至今全部版本都是 `0.1.0-rc.N`）。现已改为完整的 semver 预发布比较，回归用例见 `npm run test:guard` 的 `[9]`。
+> `updater.isNewer()` 原先在第一个 `-` 处截断版本号，`0.1.0-rc.5` 与 `0.1.0-rc.6` 会被判为相等。这对只发正式版的 pi-web 无害，但会让 dsh **永远检查不到更新**（它至今全部版本都是 `X.Y.Z-rc.N` 预发布）。现已改为完整的 semver 预发布比较，回归用例见 `npm run test:guard` 的 `[9]`。
 
 ### 从 Pi 导入模型配置
 

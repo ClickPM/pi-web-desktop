@@ -196,7 +196,7 @@ function comparePre(a, b) {
  * "-", which made `0.1.0-rc.5` and `0.1.0-rc.6` compare EQUAL — harmless while
  * the only tracked package (pi-web) shipped plain releases, but it would have
  * frozen @deepseek-ai/dsh forever: its entire published history so far is
- * `0.1.0-rc.N`, so every check would have reported "already up to date".
+ * `X.Y.Z-rc.N`, so every check would have reported "already up to date".
  */
 function isNewer(latest, installed) {
   if (!installed) return true;

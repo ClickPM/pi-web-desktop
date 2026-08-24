@@ -410,8 +410,9 @@ async function open() {
  * pi uses.
  *
  * Note this only works because updater.isNewer understands prereleases: every
- * dsh release so far is `0.1.0-rc.N`, which the old truncate-at-"-" comparison
- * would have reported as "already up to date" forever.
+ * dsh release so far is an `-rc.N` prerelease (`0.1.0-rc.7`, `0.1.1-rc.2`, …),
+ * which the old truncate-at-"-" comparison would have reported as "already
+ * up to date" forever.
  */
 async function checkUpdate(interactive) {
   try {
