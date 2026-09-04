@@ -90,12 +90,15 @@ pi-web-desktop/
 
 **按需启动**：boot 时**不**拉起，第一次点菜单才装/起；**关掉 dsh 窗口即停服务**（dsh 插件树很大，为一个可能一周开一次的功能常驻内存不划算）。实测冷启（全新 `$DSH_HOME`，要写 profile + 约 250 个 junction）约 39s，之后温启动约 2.4s。
 
-与 pi 窗口刻意**不共享**的四件事：
+与 pi 窗口刻意**不共享**的五件事：
 
 1. **不挂 preload**。`preload.js` 的注入只用 `location.protocol === "http:"` 把关，而 dsh 页面同样是 `http://127.0.0.1`，挂上去会把 pi 的底部 dashboard 和 Tools chip 注入进来——那些 IPC 读的是 `~/.pi`，显示的数字与窗口内容毫无关系。dsh 也确实不需要外壳提供任何东西（它的目录选择器从自己的宿主进程拉起 Windows 原生 `IFileOpenDialog`）。
 2. **不写 `nativeTheme`**。`themeSource` 是 app 全局的，第二个窗口去驱动它会连带把 pi 窗口的原生标题栏刷成另一套配色。主题仍由主窗口独占（`features/native-theme.js`）。
 3. **自己一把锁**。dsh 的运行时目录与 pi 的相互独立，更新/自愈各自串行，互不阻塞。
 4. **版本钉死，且没有自动更新**。`runtime-seed-dsh/package.json` 写的是精确版本而非 `^`：dsh 处于 developer preview，README 明说 rc 之间可能不兼容。pi-web 那套「启动后自动静默检查」**没有**接到 dsh 上，只有菜单 `检查 DeepSeek Harness 更新…` 会去查、并在确认后才装。
+5. **自己一个 session 分区**（`persist:dsh`）。0.1.2-rc.1 起 dsh 会给浏览器发签名 cookie，而该 cookie 是 `127.0.0.1` 的 host-only cookie——**Chromium 的 cookie 不按端口隔离**，放在默认 session 里它会跟着每一个 pi-web 请求一起发出去，且每换一个端口（每次开 dsh）就多攒一条。分区一隔，dsh 的凭据就只留在 dsh 窗口里。
+
+> **0.1.2-rc.1 的破坏性变更：Web 根路径需要令牌。** 每个 dsh 进程会随机生成一枚 launch token，唯一的入口是 `GET /?token=…` 把它换成签名 cookie 再 303 跳回干净的 `/`；直接访问干净 `/` 一律 401。所以窗口不能再用外壳自己挑的端口拼 URL，必须解析 dsh 在 stdout 上**公告**的那一行（`dsh web: http://127.0.0.1:<port>/?token=…`）。注意 `waitForServer` 对任何 HTTP 响应都算就绪（401 也算），所以它探测成功 ≠ 页面能开——公告行要单独等。解析后 token 会从调试日志和错误弹窗里抹掉；解析不到时回退到裸 origin，正好覆盖 0.1.2-rc.1 之前的版本和用户自行关掉 `printUrl` 的情况。
 
 > `updater.isNewer()` 原先在第一个 `-` 处截断版本号，`0.1.0-rc.5` 与 `0.1.0-rc.6` 会被判为相等。这对只发正式版的 pi-web 无害，但会让 dsh **永远检查不到更新**（它至今全部版本都是 `X.Y.Z-rc.N` 预发布）。现已改为完整的 semver 预发布比较，回归用例见 `npm run test:guard` 的 `[9]`。
 

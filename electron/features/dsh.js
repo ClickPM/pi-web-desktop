@@ -32,6 +32,22 @@
  *     boots a large plugin tree; keeping it resident for a feature the user
  *     may open once a week is not worth the RAM.
  *
+ *  5. ITS OWN SESSION PARTITION. From 0.1.2-rc.1 dsh authenticates the
+ *     browser: each process mints a launch token, the ONLY way in is one
+ *     `GET /?token=…` that trades it for a signed cookie, and every other
+ *     request to a clean `/` is 401. Two consequences for this shell:
+ *
+ *       - the window must be pointed at the URL dsh ANNOUNCES on stdout
+ *         (`dsh web: http://127.0.0.1:<port>/?token=…`), not at the origin we
+ *         chose the port for. dsh 303-redirects to a clean `/` once the cookie
+ *         is set, so `serverUrl` stays the right thing to compare against.
+ *
+ *       - that cookie is host-only for `127.0.0.1`, and Chromium does not
+ *         scope cookies by PORT — on the shared default session it would ride
+ *         along on every pi-web request too, one more cookie per dsh launch.
+ *         A private partition keeps dsh's credentials on dsh's window, which
+ *         is what points 1–3 already say about everything else.
+ *
  * NODE FLOOR: dsh needs node >= 22.19 (it imports `createZstdDecompress` from
  * node:zlib and `stripTypeScriptTypes` from node:module). vendor/node is
  * provisioned by scripts/seed-node.ps1, which enforces that floor — do not
@@ -56,6 +72,14 @@ let ctx = null;
 
 let serverProc = null;
 let serverUrl = null;
+/**
+ * The URL the WINDOW is pointed at, as opposed to `serverUrl` (the bare
+ * origin). Since dsh 0.1.2-rc.1 the two differ: see point 5 in the header.
+ */
+let serverPageUrl = null;
+let announcedUrl = null;
+let announceBuf = "";
+let announceWaiters = [];
 let serverLog = "";
 let win = null;
 let starting = null;
@@ -234,10 +258,64 @@ function serverEnv() {
   };
 }
 
+/** The line dsh prints once its plugin tree has settled and the port is live. */
+const URL_LINE = /(?:^|\s)dsh web:\s*(https?:\/\/\S+)/;
+
+/**
+ * Keep the launch token out of the debug log and out of the error dialog that
+ * shows the log's tail. It dies with the process, so this is hygiene rather
+ * than a security boundary — but a live bearer credential still has no reason
+ * to be sitting in a file on disk.
+ */
+function redactToken(text) {
+  return text.replace(/([?&]token=)[^\s&"']+/g, "$1***");
+}
+
+/** Record dsh's announced browser URL the first time it appears. */
+function scanAnnouncement(log) {
+  const m = URL_LINE.exec(log);
+  if (!m) return;
+  announcedUrl = m[1];
+  dbg(`announced URL: ${redactToken(announcedUrl)}`);
+  const waiters = announceWaiters;
+  announceWaiters = [];
+  for (const resolve of waiters) resolve(announcedUrl);
+}
+
+/**
+ * Wait for that line, falling back to the bare origin.
+ *
+ * The fallback is not dead code: every dsh before 0.1.2-rc.1 announces the
+ * clean URL and needs no token at all, and `printUrl` is a patchable row a
+ * user could turn off in their own `cordis.patch.yml`. In both cases the
+ * origin IS the page, so guessing it beats hanging.
+ */
+function waitForAnnouncedUrl(timeoutMs, fallback) {
+  if (announcedUrl) return Promise.resolve(announcedUrl);
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    announceWaiters.push(settle);
+    setTimeout(() => {
+      if (settled) return;
+      dbg(`no URL line within ${timeoutMs}ms — falling back to ${fallback}`);
+      settle(fallback);
+    }, timeoutMs);
+  });
+}
+
 function startServer(port) {
   const bin = binPath();
   dbg(`startServer node=${ctx.bundledNodeExe()} bin=${bin} exists=${fs.existsSync(bin)} port=${port} home=${dshHome()}`);
   if (!fs.existsSync(bin)) throw new Error(`dsh 入口缺失：${bin}`);
+
+  announcedUrl = null;
+  announceBuf = "";
+  announceWaiters = [];
 
   serverProc = spawn(
     ctx.bundledNodeExe(),
@@ -257,10 +335,18 @@ function startServer(port) {
 
   const capture = (chunk) => {
     const text = chunk.toString();
-    serverLog += text;
+    // Scan the RAW text, and only until the line lands: stdout arrives in
+    // arbitrary pieces, so keep a short raw tail in case it straddles two.
+    if (!announcedUrl) {
+      announceBuf = (announceBuf + text).slice(-4000);
+      scanAnnouncement(announceBuf);
+      if (announcedUrl) announceBuf = "";
+    }
+    const shown = redactToken(text);
+    serverLog += shown;
     if (serverLog.length > 20000) serverLog = serverLog.slice(-20000);
-    dbg(`[server] ${text.replace(/\s+$/, "")}`);
-    process.stdout.write(`[dsh] ${text}`);
+    dbg(`[server] ${shown.replace(/\s+$/, "")}`);
+    process.stdout.write(`[dsh] ${shown}`);
   };
   serverProc.stdout.on("data", capture);
   serverProc.stderr.on("data", capture);
@@ -284,6 +370,7 @@ function stop() {
   if (!serverProc || serverProc.killed) {
     serverProc = null;
     serverUrl = null;
+    serverPageUrl = null;
     return;
   }
   stoppingIntentionally = true;
@@ -304,6 +391,9 @@ function stop() {
   }
   serverProc = null;
   serverUrl = null;
+  // The launch token dies with the process it was minted for.
+  serverPageUrl = null;
+  announcedUrl = null;
   setTimeout(() => {
     stoppingIntentionally = false;
   }, 1000);
@@ -323,6 +413,11 @@ function ensureServer() {
     // dsh's first boot in a fresh $DSH_HOME writes the profile and ~250
     // junctions before it listens, so the probe needs real headroom.
     await ctx.waitForServer(`${url}/`, 120000);
+    // An answering port is not yet a servable page: waitForServer resolves on
+    // ANY response, and from 0.1.2-rc.1 a clean `/` answers 401 until the
+    // announced token has been exchanged for the session cookie. dsh prints
+    // that URL only after the whole tree settles, so it lands after the probe.
+    serverPageUrl = await waitForAnnouncedUrl(60000, url);
     serverUrl = url;
     dbg(`server up at ${url}`);
     return url;
@@ -354,6 +449,9 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       // No preload — see the module header (point 1).
+      // Own partition — see point 5: dsh's auth cookie is host-only for
+      // 127.0.0.1, which pi-web also serves from.
+      partition: "persist:dsh",
       spellcheck: false,
     },
   });
@@ -391,8 +489,11 @@ async function open() {
       return;
     }
     // Re-navigate only when the window isn't already on this server — a focus
-    // click must not reload a session mid-turn.
-    if (!win.webContents.getURL().startsWith(url)) win.loadURL(url);
+    // click must not reload a session mid-turn. The comparison is against the
+    // ORIGIN on purpose: the token exchange redirects to a clean `/`, so a
+    // window that already went through it reads back as `url`, not as the
+    // tokenized address it was sent to.
+    if (!win.webContents.getURL().startsWith(url)) win.loadURL(serverPageUrl || url);
   } catch (e) {
     dbg(`open failed: ${(e && e.stack) || e}`);
     if (win && !win.isDestroyed()) {
