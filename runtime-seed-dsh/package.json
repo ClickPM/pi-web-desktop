@@ -2,10 +2,10 @@
   "name": "runtime-seed-dsh",
   "version": "1.0.0",
   "private": true,
-  "description": "npm prod install of @deepseek-ai/dsh, shipped as resources/runtime-seed-dsh. Pinned EXACTLY (not ^): dsh is a developer preview whose README promises compatibility-breaking changes between rc builds, so the bundled baseline moves only when a human bumps this line and re-runs `npm run seed:dsh`.",
+  "description": "npm prod install of @deepseek-ai/dsh, shipped as resources/runtime-seed-dsh. Pinned EXACTLY (not ^): dsh is a developer preview whose README promises compatibility-breaking changes between rc builds, so the bundled baseline moves only when a human bumps this line and re-runs `npm run seed:dsh`. NOTE 0.1.2-rc.1 ships on the `next` dist-tag while `latest` still points at 0.1.1-rc.2, so features/dsh.js's update check (npm view <pkg> version, i.e. `latest`) sees an OLDER version than the one bundled here and correctly reports 'already up to date' until upstream moves the tag.",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "@deepseek-ai/dsh": "0.1.1-rc.2"
+    "@deepseek-ai/dsh": "0.1.2-rc.1"
   }
 }
