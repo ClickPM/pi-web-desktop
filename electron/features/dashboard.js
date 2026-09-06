@@ -422,11 +422,13 @@ function readWiki(cwd) {
 // ---------------------------------------------------------------------------
 /**
  * Read the full dashboard status. Never throws — partial data + error string.
- * Async because the subagent section probes the OS process table.
- * @param {{ sinceMs?: number, serverPid?: number }} [opts]
+ * Async because the subagent section asks the embedded server for its running
+ * sessions (and, with the legacy pi-subagents package, probes the process table).
+ * @param {{ sinceMs?: number, serverPid?: number, serverUrl?: string|null }} [opts]
  *   sinceMs = only count token usage / "done this session" from turns at/after
- *   this epoch ms (the app boot time); 0/omitted = all. serverPid = pid of the
- *   pi-web server, so subagent counting is scoped to THIS app's children.
+ *   this epoch ms (the app boot time); 0/omitted = all. serverUrl = the embedded
+ *   pi-web server (built-in subagent running snapshot). serverPid = pid of that
+ *   server, so legacy subagent process counting is scoped to THIS app's children.
  */
 async function readStatus(opts) {
   opts = opts || {};
@@ -436,8 +438,14 @@ async function readStatus(opts) {
   let mcp = { active: [], inactive: [] };
   let extensions = { active: [], inactive: [] };
   let tokens = { total: 0, input: 0, output: 0, calls: 0, sessions: 0, sinceMs: opts.sinceMs || 0 };
-  let subs = { running: 0, runningList: [], doneSession: 0, failedSession: 0, recent: [] };
+  let subs = { running: 0, runningList: [], doneSession: 0, abortedSession: 0, failedSession: 0, recent: [] };
   let wiki = { present: false };
+  let cwd = null;
+  try {
+    cwd = activeCwd();
+  } catch (e) {
+    error = `工作区解析失败: ${(e && e.message) || e}`;
+  }
   try {
     mcp = readMcp(mcpConfigPath);
   } catch (e) {
@@ -454,14 +462,17 @@ async function readStatus(opts) {
     error = (error ? error + "; " : "") + `token 统计失败: ${(e && e.message) || e}`;
   }
   try {
-    subs = await subagents.readSubagents({ serverPid: opts.serverPid, sinceMs: opts.sinceMs || 0 });
+    subs = await subagents.readSubagents({
+      serverUrl: opts.serverUrl,
+      serverPid: opts.serverPid,
+      sinceMs: opts.sinceMs || 0,
+      cwd,
+    });
     if (subs.error) error = (error ? error + "; " : "") + subs.error;
   } catch (e) {
-    error = (error ? error + "; " : "") + `子会话统计失败: ${(e && e.message) || e}`;
+    error = (error ? error + "; " : "") + `子代理统计失败: ${(e && e.message) || e}`;
   }
-  let cwd = null;
   try {
-    cwd = activeCwd();
     wiki = readWiki(cwd);
   } catch (e) {
     error = (error ? error + "; " : "") + `wiki 读取失败: ${(e && e.message) || e}`;

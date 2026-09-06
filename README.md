@@ -206,7 +206,24 @@ pi 自动发现 `~/.pi/agent/skills/` 下的技能，因此它们在**每个工�
    - 放行内置解释器 `$PI_BUNDLED_PYTHON`，让 `ppt-master` 直接用它（重依赖现成）；
    - **用户自己的项目 Python 代码仍被强制走干净的 `.venv`**（方案 B：技能依赖留在内置 Python 的 base，不污染项目 venv）。
 
-### 子智能体跑的是内置 pi（`PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT`）
+### 仪表盘 Sub-agents 模块读的是什么（`electron/features/subagents.js`）
+
+底栏「Sub-agents」磁贴显示**正在运行 / 本次完成**的子代理，点开是运行列表（可中止）与最近记录。两代子代理留下的痕迹完全不同，模块把两者读出来合并显示：
+
+| | **内置子代理**（pi-web ≥ 0.9.0，`Agent` / `get_subagent_result` / `steer_subagent`） | **`pi-subagents` npm 包**（旧，装了才读） |
+|---|---|---|
+| 运行形态 | Next.js 服务**进程内**的 AgentSession，**没有子进程** | spawn 子 `pi` 进程 |
+| 「正在运行」来源 | `GET /api/agent/running` 的 `runningSessionIds` ∩ 子代理会话文件 | 进程表里从服务 pid 派生的 `pi-coding-agent/dist/cli.js` |
+| 名称 / 任务 | 会话 JSONL 第二条 `customType:"pi-web:subagent"`（profile、description、task、前台/后台、父会话） | 提示词临时文件名 / async `status.json` |
+| 结束状态 | 末尾 `customType:"pi-web:subagent-result"`（completed / failed / aborted）；有元数据无结果且不在运行中 = **中断**（服务重启把它切掉了） | `~/.pi/agent/run-history.jsonl` |
+| 中止 | `POST /api/agent/<id> {type:"abort"}`（就是 pi-web 自己的 Stop，记为 aborted 并通知父会话），前面先 `GET` 确认还活着——对没有活 wrapper 的会话 POST 会让 pi-web **把它拉起来** | `taskkill /T` 整棵进程树（pi-subagents 的优雅中断在 Windows 上 ENOSYS） |
+
+- 开关状态从 `~/.pi/agent/agents/settings.json` 的 `builtInEnabled` 读（缺省/坏文件按关闭，与 pi-web 一致），关着时弹层直接提示去「设置 → Agents」开启，而不是显示一个空列表。
+- 中止请求的会话 id **只接受**当前扫描仍判定为子代理会话的那些，所以渲染层拿不到能中止主对话的口子；pid 同样要在新鲜的进程快照里仍是我们服务之下的 pi 进程。
+- 进程枚举（Windows 上是一次 PowerShell CIM 查询）只在 `pi-subagents` 确实安装时（`settings.json` 的 `packages` 或 `~/.pi/agent/npm/node_modules`）才跑；只用内置子代理的机器完全不碰进程表。
+- 元数据入口只扫 **mtime ≥ 本次启动**的会话文件：运行中的文件每条消息都会被改写，结束时又追加结果条目，所以这是「正在运行或本次结束」的精确前置过滤，不会把整个会话库读一遍。
+
+### 子智能体跑的是内置 pi（`PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT`，仅旧 `pi-subagents` 包相关）
 
 `pi-subagents` 起子智能体的方式是 **spawn 一个子 `pi` 进程**，而它找 pi 的顺序是：`PI_SUBAGENT_PI_BINARY` → 显式 package root → 探 `process.argv[1]` → 从自身安装位置 `import.meta.resolve`。桌面端两条自动路径**都会落空**：服务进程的 `argv[1]` 是 next 的 bin（不在 pi-coding-agent 目录下），而 `pi-subagents` 装在 `~/.pi/agent/npm`，那里的 `@earendil-works/` 是空的——桌面端从不往那儿 npm install pi。于是 `getPiSpawnCommand()` 兜底成裸 `"pi"`，**走 PATH 上全局安装的那个 pi**（本机实测：父进程 0.84.0，子智能体却是全局的 0.81.1），空电脑上则直接没有。
 

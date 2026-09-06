@@ -312,4 +312,6 @@ async function readTools(opts) {
   return payload;
 }
 
-module.exports = { readTools };
+// `request` is shared with features/subagents.js, which talks to the same
+// embedded server (running-session snapshot + abort) under the same rules.
+module.exports = { readTools, request };

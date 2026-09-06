@@ -608,7 +608,7 @@ ipcRenderer.on("pi-web-desktop:update-notice", (_e, notice) => {
     const category = "subagents";
     const chip = document.createElement("button");
     chip.type = "button";
-    chip.setAttribute("aria-label", "子会话（sub-agent）运行状态");
+    chip.setAttribute("aria-label", "子代理（sub-agent）运行状态");
     const cs = chip.style;
     cs.pointerEvents = "auto";
     cs.display = "flex";
@@ -859,10 +859,13 @@ ipcRenderer.on("pi-web-desktop:update-notice", (_e, notice) => {
         }
         rd.style.opacity = "0.35";
       }
+      const aborted = s ? s.abortedSession || 0 : 0;
+      const builtinOff = !!(s && s.builtin && s.builtin.enabled === false);
       chips.subagents.el.title = s
-        ? `子会话（sub-agent）：${running} 个运行中\n` +
-          `本次启动已完成 ${done} 个${failed ? `，失败 ${failed} 个` : ""}`
-        : "子会话（sub-agent）运行状态";
+        ? `子代理（sub-agent）：${running} 个运行中\n` +
+          `本次启动已完成 ${done} 个${aborted ? `，中止 ${aborted} 个` : ""}${failed ? `，失败 ${failed} 个` : ""}` +
+          (builtinOff ? "\n内置子代理未启用（pi-web 设置 → Agents）" : "")
+        : "子代理（sub-agent）运行状态";
     }
     if (chips.tools) {
       const t = tools;
@@ -1295,39 +1298,82 @@ ipcRenderer.on("pi-web-desktop:update-notice", (_e, notice) => {
       .catch((e) => fail(String((e && e.message) || e)));
   }
 
-  // Two sections: live runs (green) + finished-this-session (gray). The running
-  // list comes from the OS process table (sees foreground AND background runs);
-  // the finished list from run-history.jsonl.
+  // A run's display name: "profile · description" for built-in runs (the
+  // description is the short label the model wrote for the UI), the agent type
+  // for legacy runs. Falls back so a row never renders empty.
+  function subagentLabel(r) {
+    const agent = r.agent || (r.kind === "builtin" ? "general-purpose" : "subagent");
+    return r.description ? `${agent} · ${r.description}` : agent;
+  }
+
+  // Hover text: what it is doing, where it came from, how to find its session.
+  function subagentTitle(r) {
+    const lines = [];
+    if (r.task) lines.push(r.task);
+    if (r.kind === "builtin") {
+      lines.push(`会话 ${r.sessionId}` + (r.parentSessionId ? `（父会话 ${String(r.parentSessionId).slice(0, 8)}）` : ""));
+      lines.push(r.mode === "bg" ? "后台运行 · 完成后通知父会话" : "前台运行 · 父会话等待其结果");
+      if (r.cwd) lines.push(r.cwd);
+    } else if (r.pid) {
+      lines.push(`pid ${r.pid}（pi-subagents 子进程）`);
+    }
+    if (r.error) lines.push(`错误：${r.error}`);
+    return lines.join("\n");
+  }
+
+  const STATUS_TEXT = {
+    running: "运行中",
+    starting: "启动中",
+    unknown: "状态未知",
+    completed: "完成",
+    aborted: "已中止",
+    failed: "失败",
+    interrupted: "中断",
+  };
+
+  // Two sections: live runs (green) + finished-this-session (gray). Built-in
+  // (pi-web >= 0.9.0) runs are in-process sessions of the embedded server — the
+  // running list comes from its /api/agent/running matched against the subagent
+  // session files; legacy pi-subagents runs from the OS process table. See the
+  // header of features/subagents.js.
   function appendSubagentSections(card) {
     const s = (status && status.subagents) || {
       running: 0,
       runningList: [],
       doneSession: 0,
+      abortedSession: 0,
       failedSession: 0,
       recent: [],
     };
+    const stoppable = (r) => (r.kind === "builtin" ? !!r.sessionId : !!r.pid);
 
     const runWrap = document.createElement("div");
     runWrap.style.marginTop = "4px";
     runWrap.style.marginBottom = "10px";
     runWrap.appendChild(sectionHeading("正在运行", GREEN, s.running || 0));
     if (!s.runningList || s.runningList.length === 0) {
-      runWrap.appendChild(emptyRow("无运行中的子会话"));
+      runWrap.appendChild(emptyRow("无运行中的子代理"));
     } else {
       for (const r of s.runningList) {
-        const tag = r.source === "background" ? r.mode || "bg" : "前台";
+        const builtin = r.kind === "builtin";
+        let tag = r.mode === "bg" ? "后台" : "前台";
+        if (r.status === "starting" || r.status === "unknown") tag = STATUS_TEXT[r.status];
         const row = subagentRow({
-          name: r.agent || "subagent",
+          name: subagentLabel(r),
           tag,
-          title: r.pid ? `pid ${r.pid}` : undefined,
+          tagColor: r.status === "unknown" ? RED : undefined,
+          title: subagentTitle(r),
         });
-        if (r.pid) {
+        if (stoppable(r)) {
           const stop = armedButton({
-            label: "终止",
-            confirmLabel: "确认终止",
-            busyLabel: "终止中…",
-            title: `强制结束 pid ${r.pid} 及其子进程（不可恢复，该步骤会记为失败）`,
-            onConfirm: (btn) => requestSubagentStop({ pid: r.pid }, btn, "终止失败"),
+            label: builtin ? "中止" : "终止",
+            confirmLabel: builtin ? "确认中止" : "确认终止",
+            busyLabel: builtin ? "中止中…" : "终止中…",
+            title: builtin
+              ? `向该子代理会话发送中止（pi-web 的 Stop），结果记为“已中止”并通知父会话`
+              : `强制结束 pid ${r.pid} 及其子进程（不可恢复，该步骤会记为失败）`,
+            onConfirm: (btn) =>
+              requestSubagentStop(builtin ? { sessionId: r.sessionId } : { pid: r.pid }, btn, builtin ? "中止失败" : "终止失败"),
           });
           stop.style.marginLeft = "6px";
           stop.style.alignSelf = "center"; // the row is baseline-aligned for text
@@ -1335,42 +1381,66 @@ ipcRenderer.on("pi-web-desktop:update-notice", (_e, notice) => {
         }
         runWrap.appendChild(row);
       }
-      if (s.runningList.filter((r) => r.pid).length > 1) {
+      const n = s.runningList.filter(stoppable).length;
+      if (n > 1) {
         const all = armedButton({
-          label: `全部终止（${s.runningList.filter((r) => r.pid).length}）`,
-          confirmLabel: "确认全部终止",
-          busyLabel: "终止中…",
+          label: `全部中止（${n}）`,
+          confirmLabel: "确认全部中止",
+          busyLabel: "中止中…",
           wide: true,
-          title: "强制结束当前所有子会话（不可恢复）",
-          onConfirm: (btn) => requestSubagentStop({ all: true }, btn, "终止失败"),
+          title: "中止当前所有运行中的子代理",
+          onConfirm: (btn) => requestSubagentStop({ all: true }, btn, "中止失败"),
         });
         all.style.margin = "8px 0 2px 13px";
         all.style.width = "calc(100% - 13px)";
         runWrap.appendChild(all);
       }
     }
+    // Why the list may be empty even though the model was asked to delegate.
+    const b = s.builtin || null;
+    if (b && b.enabled === false) {
+      runWrap.appendChild(hintRow("内置子代理未启用 — 在 pi-web「设置 → Agents」中开启后重载会话。"));
+    } else if (b && b.probe !== "ok") {
+      runWrap.appendChild(hintRow(b.probe === "no-server" ? "内嵌服务还没就绪，运行状态未知。" : "无法查询内嵌服务的运行状态。"));
+    }
     card.appendChild(runWrap);
 
     const doneWrap = document.createElement("div");
     doneWrap.style.marginTop = "4px";
     doneWrap.style.marginBottom = "6px";
-    const doneLabel = (s.failedSession || 0) > 0 ? `本次完成（失败 ${s.failedSession}）` : "本次完成";
+    const extras = [];
+    if ((s.abortedSession || 0) > 0) extras.push(`中止 ${s.abortedSession}`);
+    if ((s.failedSession || 0) > 0) extras.push(`失败 ${s.failedSession}`);
+    const doneLabel = extras.length ? `本次完成（${extras.join("，")}）` : "本次完成";
     doneWrap.appendChild(sectionHeading(doneLabel, GRAY, s.doneSession || 0));
     if (!s.recent || s.recent.length === 0) {
       doneWrap.appendChild(emptyRow("暂无记录"));
     } else {
       for (const e of s.recent) {
-        const ok = e.status !== "error";
+        const bad = e.status === "failed" || e.status === "interrupted";
+        const dur = fmtDuration(e.durationMs);
+        const state = STATUS_TEXT[e.status] || e.status;
         doneWrap.appendChild(
           subagentRow({
-            name: e.agent,
-            tag: fmtDuration(e.durationMs) || (ok ? "ok" : "error"),
-            tagColor: ok ? "var(--text-dim, #9ca3af)" : RED,
+            name: subagentLabel(e),
+            tag: e.status === "completed" && dur ? dur : dur ? `${state} · ${dur}` : state,
+            tagColor: bad ? RED : "var(--text-dim, #9ca3af)",
+            title: subagentTitle(e),
           })
         );
       }
     }
     card.appendChild(doneWrap);
+  }
+
+  function hintRow(text) {
+    const hint = document.createElement("div");
+    hint.textContent = text;
+    hint.style.color = "var(--text-dim, #9ca3af)";
+    hint.style.fontSize = "11.5px";
+    hint.style.lineHeight = "1.6";
+    hint.style.padding = "4px 0 0 13px";
+    return hint;
   }
 
   // --- wiki popover body: domain breakdown + "open graph" action ---

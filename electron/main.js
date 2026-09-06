@@ -962,9 +962,13 @@ ipcMain.on("pi-web-desktop:open-okf-graph", async () => {
 // MCP servers and extensions. Never throws — returns a partial result + error.
 ipcMain.handle("pi-web-desktop:dashboard-status", async () => {
   try {
-    // serverPid scopes subagent counting to THIS app's child processes.
+    // serverUrl: built-in subagents are in-process sessions of the embedded
+    // server, so their running state comes from its /api/agent/running.
+    // serverPid scopes legacy (pi-subagents) process counting to THIS app's
+    // child processes.
     return await dashboard.readStatus({
       sinceMs: APP_BOOT_MS,
+      serverUrl,
       serverPid: serverProc && !serverProc.killed ? serverProc.pid : undefined,
     });
   } catch (e) {
@@ -973,7 +977,7 @@ ipcMain.handle("pi-web-desktop:dashboard-status", async () => {
       mcp: { active: [], inactive: [] },
       extensions: { active: [], inactive: [] },
       tokens: { total: 0, input: 0, output: 0, calls: 0, sessions: 0 },
-      subagents: { running: 0, runningList: [], doneSession: 0, failedSession: 0, recent: [] },
+      subagents: { running: 0, runningList: [], doneSession: 0, abortedSession: 0, failedSession: 0, recent: [] },
       error: String((e && e.message) || e),
     };
   }
@@ -1006,21 +1010,36 @@ ipcMain.handle("pi-web-desktop:tools-status", async (_event, payload) => {
   }
 });
 
-// Stop button on the Sub-agents popover. Forced subtree termination — see the
-// header of features/subagents.js for why a graceful interrupt isn't available.
-// The pid is re-validated against a fresh process snapshot inside stopSubagents
-// (it must still be a pi-cli process under OUR server), so a stale or forged pid
-// from the renderer can't be turned into a kill of an arbitrary process.
+// Stop button on the Sub-agents popover. Payload is one of
+//   { sessionId }  built-in (pi-web >= 0.9.0) run → pi-web's own graceful abort
+//   { pid }        legacy pi-subagents child process → forced subtree kill
+//   { all: true }  everything running, both kinds
+// Both identifiers are re-validated inside stopSubagents against fresh state (a
+// session id must still be a subagent session file AND live in the server's
+// registry; a pid must still be a pi-cli process under OUR server), so a stale
+// or forged value from the renderer can't abort the user's main chat or kill an
+// arbitrary process. See the header of features/subagents.js.
 ipcMain.handle("pi-web-desktop:subagent-stop", async (_event, payload) => {
   const req = payload && typeof payload === "object" ? payload : {};
-  const pids = req.all === true ? "all" : [Number(req.pid)];
+  const opts = {
+    all: req.all === true,
+    pids: Number.isInteger(Number(req.pid)) && Number(req.pid) > 1 ? [Number(req.pid)] : [],
+    sessionIds: typeof req.sessionId === "string" && req.sessionId ? [req.sessionId] : [],
+    serverUrl,
+    serverPid: serverProc && !serverProc.killed ? serverProc.pid : undefined,
+    sinceMs: APP_BOOT_MS,
+    cwd: null,
+  };
+  const label = opts.all ? "all" : opts.sessionIds.length ? `session ${opts.sessionIds[0]}` : `pid ${req.pid}`;
   try {
-    const res = await subagents.stopSubagents({
-      pids,
-      serverPid: serverProc && !serverProc.killed ? serverProc.pid : undefined,
-    });
+    opts.cwd = dashboard.activeCwd();
+  } catch {
+    /* legacy-package lookup falls back to global settings */
+  }
+  try {
+    const res = await subagents.stopSubagents(opts);
     dbg(
-      `subagent-stop ${req.all ? "all" : `pid ${req.pid}`} → ok=${res.ok} ` +
+      `subagent-stop ${label} → ok=${res.ok} ` +
         `stopped=[${res.stopped.join(",")}] skipped=${res.skipped.length}${res.error ? ` error=${res.error}` : ""}`
     );
     return res;
