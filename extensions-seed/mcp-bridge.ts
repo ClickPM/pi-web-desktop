@@ -38,7 +38,9 @@
  *   }
  *   每个 server 可选字段:
  *     disabled: true   跳过该 server
- *     confirm:  true   调用该 server 的工具前弹确认(等价 PI_MCP_CONFIRM=all 的单服开关)
+ *     confirm:  true   调用该 server 的工具前弹确认(等价 PI_MCP_CONFIRM=all 的单服开关);
+ *                      无 UI 可用时直接拒绝该次调用,不会为了不卡住而放行
+ *     tools: { allow: ["toolA"] }  只注册白名单里的工具,其余不暴露给模型
  *     eager:    true   该 server 的工具默认激活(进上下文),不走惰性加载
  *     eager: ["toolA"]  仅指定工具默认激活,其余惰性加载
  *     env: {...}       stdio 子进程额外环境变量(只加这些,不再继承 pi 的完整环境)
@@ -48,6 +50,25 @@
  *     protocol: "auto" | "legacy" | "2026-07-28"   该 server 的协议版本策略,覆盖
  *                      PI_MCP_PROTOCOL;auto=先探测再决定,legacy=只用 2025 版握手,
  *                      写具体日期=钉死该版本(连不上就报错,不回退)
+ *
+ * agent-config 注册表叠加(mcp.json 里可选的 "agentConfig" 块):
+ *   除 mcpServers 外,桥接默认还会叠加全局 @local/agent-config 的 MCP 注册表:
+ *   注册表里的服务按 id 覆盖同名 mcpServers 条目(transport 由 materialize 现算,
+ *   带上 tools.allow),policy.retired 列出的 id 则直接删掉。
+ *   {
+ *     "agentConfig": {
+ *       "enabled": false,             // 关掉叠加,只用 mcpServers(默认开)
+ *       "configDir": "<path>",        // 注册表目录,默认 AGENT_CONFIG_HOME 或 ~/.agent-config
+ *       "target": "pi",               // 取哪个 agent 的视图,默认 pi
+ *       "confirm": ["<id>"],          // 这些服务强制调用前确认
+ *       "eager":    { "<id>": true }, // 覆盖惰性加载,取值同上面的 eager 字段
+ *       "timeout":  { "<id>": 30000 },
+ *       "protocol": { "<id>": "legacy" }
+ *     }
+ *   }
+ *   @local/agent-config 是全局 npm 包,不在扩展目录的解析路径上,按各平台的全局
+ *   node_modules 顺序查找(AGENT_CONFIG_MCP_MODULE 可钉死 src/mcp.mjs 的绝对路径);
+ *   找不到就跳过叠加,只加载 mcp.json,并在启动日志里说明。
  *
  * 开关(环境变量):
  *   PI_MCP_CONFIG=<path>     覆盖 mcp.json 路径
@@ -69,6 +90,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 // ---------------------------------------------------------------------------
@@ -92,15 +114,145 @@ function configPath(): string {
   return process.env.PI_MCP_CONFIG || path.join(os.homedir(), ".pi", "agent", "mcp.json");
 }
 
-function loadServers(): Record<string, any> {
+// ---------------------------------------------------------------------------
+// @local/agent-config 的定位
+//
+// agent-config 是全局安装的 npm 包(`npm i -g`),不在 ~/.pi/agent/extensions/ 的
+// 模块解析路径上,裸 specifier 解析不到,所以按固定顺序探测各平台的全局
+// node_modules 目录再动态 import —— 与 electron/features/dashboard.js 里
+// findAgentConfigMcpFile() 完全同一套顺序,两边看到的注册表必须一致。
+// AGENT_CONFIG_MCP_MODULE 可直接钉死 mcp.mjs 的绝对路径(装在非常规位置时用)。
+// 找不到就返回 null,桥接退回“只读 mcp.json”,不影响已有 mcpServers。
+// ---------------------------------------------------------------------------
+
+const AGENT_CONFIG_MCP_REL = path.join("@local", "agent-config", "src", "mcp.mjs");
+
+function isFile(p: string): boolean {
+  try {
+    return fs.statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function findAgentConfigMcpFile(): string | null {
+  const pinned = process.env.AGENT_CONFIG_MCP_MODULE?.trim();
+  if (pinned) return isFile(pinned) ? pinned : null;
+  const dirs: string[] = [];
+  if (process.env.APPDATA) dirs.push(path.join(process.env.APPDATA, "npm", "node_modules"));
+  if (process.env.npm_config_prefix) {
+    dirs.push(path.join(process.env.npm_config_prefix, "node_modules"));
+    dirs.push(path.join(process.env.npm_config_prefix, "lib", "node_modules"));
+  }
+  dirs.push("/usr/local/lib/node_modules");
+  dirs.push(path.join(os.homedir(), ".npm-global", "lib", "node_modules"));
+  dirs.push(path.join(os.homedir(), "AppData", "Roaming", "npm", "node_modules"));
+  for (const dir of dirs) {
+    const full = path.join(dir, AGENT_CONFIG_MCP_REL);
+    if (isFile(full)) return full;
+  }
+  return null;
+}
+
+type AgentConfigMcp = {
+  resolveMcp: (dir: string, opts: { target: string; workspace: string }) => any;
+  materializeMcpService: (dir: string, id: string, opts: Record<string, any>) => any;
+};
+
+// undefined = 还没找过;null = 找不到/加载失败;对象 = 已加载
+let agentConfigMcpMod: AgentConfigMcp | null | undefined = undefined;
+
+async function loadAgentConfigMcp(): Promise<AgentConfigMcp | null> {
+  if (agentConfigMcpMod !== undefined) return agentConfigMcpMod;
+  const file = findAgentConfigMcpFile();
+  if (!file) {
+    agentConfigMcpMod = null;
+    return null;
+  }
+  try {
+    agentConfigMcpMod = (await import(pathToFileURL(file).href)) as AgentConfigMcp;
+  } catch {
+    agentConfigMcpMod = null;
+  }
+  return agentConfigMcpMod;
+}
+
+type BridgeConfig = {
+  agentConfig?: {
+    enabled?: boolean;
+    configDir?: string;
+    target?: string;
+    confirm?: string[];
+    eager?: Record<string, boolean | string[]>;
+    timeout?: Record<string, number>;
+    protocol?: Record<string, string>;
+  };
+  mcpServers?: Record<string, any>;
+};
+
+function loadBridgeConfig(): BridgeConfig {
   const p = configPath();
   if (!fs.existsSync(p)) return {};
   try {
-    const parsed = JSON.parse(fs.readFileSync(p, "utf8"));
-    return (parsed?.mcpServers ?? {}) as Record<string, any>;
+    return JSON.parse(fs.readFileSync(p, "utf8")) as BridgeConfig;
   } catch (e) {
     throw new Error(`mcp.json 解析失败 (${p}): ${e instanceof Error ? e.message : String(e)}`);
   }
+}
+
+function applyLocalPolicy(cfg: any, serviceId: string, bridge: BridgeConfig): any {
+  const ac = bridge.agentConfig ?? {};
+  const out = { ...cfg };
+  if (ac.confirm?.includes(serviceId)) out.confirm = true;
+  if (ac.eager && Object.hasOwn(ac.eager, serviceId)) out.eager = ac.eager[serviceId];
+  if (ac.timeout && Number(ac.timeout[serviceId]) > 0) out.timeout = Number(ac.timeout[serviceId]);
+  if (ac.protocol?.[serviceId]) out.protocol = ac.protocol[serviceId];
+  return out;
+}
+
+async function loadServers(
+  workspace: string,
+  sessionId: string,
+  notes: string[],
+): Promise<Record<string, any>> {
+  const bridge = loadBridgeConfig();
+  const servers: Record<string, any> = { ...(bridge.mcpServers ?? {}) };
+  if (bridge.agentConfig?.enabled === false) return servers;
+
+  const mod = await loadAgentConfigMcp();
+  if (!mod) {
+    notes.push("未找到全局 @local/agent-config,本次只加载 mcp.json 里的 mcpServers。");
+    return servers;
+  }
+
+  const dir = path.resolve(
+    bridge.agentConfig?.configDir ||
+      process.env.AGENT_CONFIG_HOME ||
+      path.join(os.homedir(), ".agent-config"),
+  );
+  const target = bridge.agentConfig?.target || "pi";
+  const contract = mod.resolveMcp(dir, { target, workspace });
+  if (contract.kind !== "agent-config/mcp-integration" || contract.contractVersion !== 1) {
+    throw new Error("agent-config MCP contract version/kind is unsupported");
+  }
+  if (contract.readyToPasteIntoClientConfig !== false) {
+    throw new Error("agent-config MCP contract unexpectedly claims native client compatibility");
+  }
+
+  for (const retired of contract.policy?.retired ?? []) delete servers[retired];
+  for (const service of contract.services ?? []) {
+    const materialized = mod.materializeMcpService(dir, service.id, {
+      workspace,
+      env: process.env,
+      session: { id: sessionId },
+    });
+    const native = {
+      ...materialized.transport,
+      ...(materialized.tools ? { tools: materialized.tools } : {}),
+    };
+    servers[service.id] = applyLocalPolicy(native, service.id, bridge);
+  }
+  return servers;
 }
 
 // ---------------------------------------------------------------------------
@@ -325,7 +477,10 @@ export default async function (pi: ExtensionAPI) {
 
   let servers: Record<string, any> = {};
   try {
-    servers = loadServers();
+    // One fresh ID per Pi conversation, stable for the lifetime of this extension instance.
+    // PI_SESSION_ID is injected by Pi; the fallback covers hosts that do not expose it.
+    const sessionId = process.env.PI_SESSION_ID || crypto.randomUUID();
+    servers = await loadServers(process.cwd(), sessionId, startupLog);
   } catch (e) {
     startupLog.push(e instanceof Error ? e.message : String(e));
   }
@@ -496,8 +651,10 @@ export default async function (pi: ExtensionAPI) {
 
       const needsConfirm = confirmAll || cfg?.confirm === true;
       const tools = await withTimeout(listAllTools(client), ms, `列出 ${server} 工具`);
+      const allow = Array.isArray(cfg?.tools?.allow) ? new Set<string>(cfg.tools.allow) : undefined;
       let registered = 0;
       for (const t of tools) {
+        if (allow && !allow.has(t.name)) continue;
         const name = piToolName(server, t.name);
         if (registry.has(name)) {
           startupLog.push(`跳过重名工具 ${name}(来自 ${server})`);
@@ -691,11 +848,11 @@ export default async function (pi: ExtensionAPI) {
     };
   });
 
-  // 确认闸门:对需要确认的 mcp__ 工具,调用前弹确认;无 UI 时放行(避免 headless 死锁)
+  // 确认闸门:对需要确认的 mcp__ 工具,调用前弹确认;无 UI 时拒绝,不能绕过权限策略。
   pi.on("tool_call", async (event, ctx) => {
     const entry = registry.get(event.toolName);
     if (!entry || !entry.confirm) return undefined;
-    if (!ctx.hasUI) return undefined; // 无 UI 不阻断
+    if (!ctx.hasUI) return { block: true, reason: `MCP 工具 ${event.toolName} 需要交互确认,当前模式无可用 UI。` };
     const preview = JSON.stringify(event.input ?? {}).slice(0, 300);
     const okToRun = await ctx.ui.confirm(
       `运行 MCP 工具 ${entry.server}/${entry.tool}?`,

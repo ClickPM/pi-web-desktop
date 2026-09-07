@@ -51,7 +51,7 @@
       "file": "mcp-bridge.ts",
       "name": "MCP 桥接（惰性加载）",
       "summary": "把 mcp.json 里的 MCP server 工具注册进 pi",
-      "description": "pi 原生不做 MCP。本扩展扮演 MCP 客户端，连接 ~/.pi/agent/mcp.json 配置的 server，并以 mcp__<server>__<tool> 命名注册工具（沿用 Claude Code 约定），支持 stdio / http / sse。支持 2026-07-28 无状态协议（server/discover 自动探测，新旧 server 通吃；工具中途要用户补参数走 MRTR 弹框）。惰性加载版：默认只暴露 mcp_search_tools，按需激活，也可用 /mcp-load 手动加载。需要 @modelcontextprotocol/client（随应用打包）。",
+      "description": "pi 原生不做 MCP。本扩展扮演 MCP 客户端，连接 ~/.pi/agent/mcp.json 配置的 server，并以 mcp__<server>__<tool> 命名注册工具（沿用 Claude Code 约定），支持 stdio / http / sse。支持 2026-07-28 无状态协议（server/discover 自动探测，新旧 server 通吃；工具中途要用户补参数走 MRTR 弹框）。惰性加载版：默认只暴露 mcp_search_tools，按需激活，也可用 /mcp-load 手动加载。装了全局 @local/agent-config 时，还会把它的 MCP 注册表叠加到 mcpServers 之上（同名按注册表算、retired 的直接删掉，可用 mcp.json 的 agentConfig 块关掉或调策略）；没装就只读 mcp.json。需要 @modelcontextprotocol/client（随应用打包）。",
       "default": true,
       "deps": ["@modelcontextprotocol/client"]
     },
@@ -76,9 +76,9 @@
     {
       "id": "web-search-tools",
       "file": "web_search_tools.ts",
-      "name": "联网搜索（Web Search / Perplexity）",
-      "summary": "四个互补的联网搜索工具，按成本分级",
-      "description": "补齐 pi 不原生支持的服务端联网搜索：web_search（免费，走 CPA 网关 Responses API 的内置 web_search，流式接收，返回带来源的结论）、perplexity_search（$0.005/次，返回结构化 ranked results）、perplexity_pro_search（$0.008/次 + token 费，Sonar Pro 多步深度检索）、perplexity_async_sonar（真异步 /v1/async/sonar 提交＋轮询，默认 sonar-deep-research，服务端排队执行可跑几分钟到十几分钟，token 费最贵，仅用于长时间深度调研）。后两个每次调用前都要用户在确认框里点同意。凭证读 models.json 已配置的 provider 或 PERPLEXITY_API_KEY，不新增密钥。取代旧的 variflight-web-search（首个工具由 variflight_web_search 更名为 web_search）。",
+      "name": "联网搜索（Web Search / Google / Perplexity）",
+      "summary": "五个互补的联网搜索工具，按成本分级（两个免费）",
+      "description": "补齐 pi 不原生支持的服务端联网搜索：web_search（免费，走 CPA 网关 Responses API 的内置 web_search，流式接收，返回带来源的结论）、google_search（免费，走 CPA 网关 Chat Completions 并携带 Gemini 原生 tools:[{google_search:{}}]，由 Google 服务端 grounding 一次往返直接返回成品答案，常带 vertexaisearch 签名来源链接，实时性最强）、perplexity_search（$0.005/次，返回结构化 ranked results）、perplexity_pro_search（$0.008/次 + token 费，Sonar Pro 多步深度检索）、perplexity_async_sonar（真异步 /v1/async/sonar 提交＋轮询，默认 sonar-deep-research，服务端排队执行可跑几分钟到十几分钟，token 费最贵，仅用于长时间深度调研）。后两个每次调用前都要用户在确认框里点同意。凭证读 models.json 已配置的 provider 或 PERPLEXITY_API_KEY，不新增密钥。取代旧的 variflight-web-search（首个工具由 variflight_web_search 更名为 web_search）。",
       "default": true,
       "deps": []
     },

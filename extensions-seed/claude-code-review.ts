@@ -33,7 +33,7 @@
  *   PI_CR_MODEL           默认模型，默认 "claude-opus-5"
  *   PI_CR_EFFORT          默认思考强度，默认 "xhigh"
  *   PI_CR_CLAUDE_BIN      claude 可执行文件的绝对路径（PATH 里找不到时用）
- *   PI_CR_TIMEOUT         单次评审超时(ms)，默认 900000（15 分钟，opus xhigh 很慢）
+ *   PI_CR_TIMEOUT         单次评审超时(ms)，默认 1800000（30 分钟，opus xhigh 很慢）
  *   PI_CR_MAX_DIFF_BYTES  塞进提示词的 diff 上限，默认 200000（超出截断并告知模型自己去 git 里取）
  *   PI_CR_SSID_TTL        SSID 探测结果缓存(ms)，默认 10000
  *   PI_CR_CONFIRM         设为 1 时每次调用前弹确认框（默认不弹，费用在结果里回报）
@@ -56,7 +56,7 @@ const REQUIRED_SSID =
   process.env.PI_CR_REQUIRED_SSID === undefined ? "Variflight" : process.env.PI_CR_REQUIRED_SSID.trim();
 const DEFAULT_MODEL = process.env.PI_CR_MODEL?.trim() || "claude-opus-5";
 const DEFAULT_EFFORT = process.env.PI_CR_EFFORT?.trim() || "xhigh";
-const TIMEOUT_MS = Number(process.env.PI_CR_TIMEOUT) > 0 ? Number(process.env.PI_CR_TIMEOUT) : 900_000;
+const TIMEOUT_MS = Number(process.env.PI_CR_TIMEOUT) > 0 ? Number(process.env.PI_CR_TIMEOUT) : 1_800_000;
 const MAX_DIFF_BYTES = Number(process.env.PI_CR_MAX_DIFF_BYTES) > 0 ? Number(process.env.PI_CR_MAX_DIFF_BYTES) : 200_000;
 const SSID_TTL_MS = Number(process.env.PI_CR_SSID_TTL) >= 0 ? Number(process.env.PI_CR_SSID_TTL) : 10_000;
 const CONFIRM_BEFORE_RUN = process.env.PI_CR_CONFIRM === "1";

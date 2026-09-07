@@ -1,35 +1,42 @@
 /**
  * Web Search for pi —— 通用联网搜索插件
  *
- * 本扩展注册四个互补的联网搜索工具，agent 应根据实际任务需要和成本选择：
+ * 本扩展注册五个互补的联网搜索工具，agent 应根据实际任务需要和成本选择：
  *
  *  1) `web_search`            —— 默认首选、**免费**。走 CPA（CLIProxyAPI）的
  *     **Responses API**（/v1/responses，stream=true 流式接收）携带内置 web_search 工具，
  *     返回“带来源的 prose 答案”。适合要一句话结论 / 已综合好的回答，也是日常默认入口。
  *
- *  2) `perplexity_search`      —— **收费 $0.005/次**（仅按请求次数，无 token 费）。
+ *  2) `google_search`          —— 与 1) 并列的免费首选，走的是 **Google 后端**。
+ *     调 CPA 的 **Chat Completions**（/v1/chat/completions，stream=true）并携带 Gemini 原生
+ *     grounding 工具 `tools: [{"google_search": {}}]`，由 Google 服务端自动检索、抓取、
+ *     合成证据后**一次往返**直接返回成品答案（Server-side Grounding，无需客户端工具循环）。
+ *     强特征模型会带出 vertexaisearch 签名重定向链接，是真调通 Google 搜索后端的最强证据。
+ *     与 1) 后端不同（Google vs OpenAI），关键结论可互相印证；通常本工具更快。
+ *
+ *  3) `perplexity_search`      —— **收费 $0.005/次**（仅按请求次数，无 token 费）。
  *     直连 Perplexity **Search API**（https://api.perplexity.ai/search，POST），
  *     返回“结构化 ranked results”（title / url / snippet / date），不做 LLM 综述。
  *     适合要多条真实来源 URL、按域名/语言/地区过滤、多角度检索。
  *
- *  3) `perplexity_pro_search`  —— **收费 $0.008/次 + Sonar Pro token 费**，最贵。
+ *  4) `perplexity_pro_search`  —— **收费 $0.008/次 + Sonar Pro token 费**，最贵。
  *     走 Perplexity **Sonar Pro 聊天补全**（/chat/completions，流式 + search_type=pro），
  *     模型自动多步检索 + 抓取页面内容后生成“带引用的深度 prose 答案”。
  *     仅在需要多步推理、复杂跨源综合时才用；简单查询不要用它（贵且慢）。
  *     每次调用前必须由用户在确认对话框中明确同意；无交互 UI 时默认阻止。
  *
- *  4) `perplexity_async_sonar` —— **收费、真异步、最重**。走 Perplexity 官方异步接口
+ *  5) `perplexity_async_sonar` —— **收费、真异步、最重**。走 Perplexity 官方异步接口
  *     POST /v1/async/sonar 提交任务、GET /v1/async/sonar/{id} 轮询取结果。默认模型
  *     `sonar-deep-research`（深度研究，token 费明显更贵；该异步接口仅接受此模型）。
  *     适合要跨大量来源、可能跑几分钟到十几分钟的长任务；服务端排队执行，客户端只
- *     轮询，不怕断连。日常搜索用 1)，多步推理用 3)，仅真正需要深度调研才用本工具。
+ *     轮询，不怕断连。日常搜索用 1)/2)，多步推理用 4)，仅真正需要深度调研才用本工具。
  *     每次调用（包括 probe_only）前必须由用户在确认对话框中明确同意；无交互 UI 时默认阻止。
  *
  * pi 引擎不原生支持服务端 web_search（provider 切 openai-responses 也只是聊天，
  * 不会自动注入 tools:[{web_search}]），所以这里用自定义工具补齐能力。
  *
  * === 凭证来源 ===
- * web_search：读 ~/.pi/agent/models.json 里**已配置的 provider**
+ * web_search / google_search：读 ~/.pi/agent/models.json 里**已配置的 provider**
  *   （默认 `cliproxy-dmit`）的 apiKey + baseURL —— 不新增密钥、不硬编码。
  * perplexity_search / perplexity_pro_search / perplexity_async_sonar：优先读环境变量 PERPLEXITY_API_KEY；
  *   若无，则回退读 models.json 里名为 `perplexity` 的 provider 的 apiKey。
@@ -42,6 +49,11 @@
  *   VF_WEB_SEARCH_IDLE_TIMEOUT  web_search 流式【空闲超时】(ms)，默认 90000：
  *                               超过该时长未收到任何 SSE 事件才判定卡死。只要服务端持续
  *                               推事件（web_search 各阶段/文本增量），就不会被掐断。
+ *   VF_GOOGLE_SEARCH_MODEL      google_search 默认模型，默认 "gemini-3.8-flash-high"
+ *                               （必须是 owned_by=antigravity 的 Gemini 文本模型；
+ *                               claude-* / gpt-oss-* / *-image 在本网关不通 grounding）
+ *   VF_GOOGLE_SEARCH_TIMEOUT    google_search 流式【总时长上限】(ms)，默认 300000（5 分钟）
+ *   VF_GOOGLE_SEARCH_IDLE_TIMEOUT google_search 流式【空闲超时】(ms)，默认 90000
  *   PERPLEXITY_API_KEY          Perplexity 密钥（search / pro search / async sonar 共用，首选来源）
  *   PERPLEXITY_PROVIDER         models.json 里 Perplexity 凭证兜底的 provider 名，默认 "perplexity"
  *   PERPLEXITY_BASE_URL         Perplexity API base，默认 "https://api.perplexity.ai"
@@ -64,6 +76,33 @@
  * 异步接口硬编码用 /v1/async/sonar（与同步 /chat/completions 旧根不同），且实测仅接受
  * sonar-deep-research 模型（传 sonar 会被 400 invalid_model 拒）。
  *
+ * === 2026-09-07 新增 google_search（探针实测结论，勿凭猜测改动） ===
+ * 在 CPA /v1/chat/completions 上对 4 种触发写法做过 A/B 对照，只有一种真正联网：
+ *   ✅ tools: [{"google_search": {}}]      —— Gemini 原生 grounding，网关直接透传给
+ *      Google 上游。实测 gemini-3.1-flash-lite 拿到真实当天日期与 vertexaisearch 签名
+ *      重定向链接；同一模型在同一时刻的其他三种写法全部答成知识截止期的旧闻。
+ *   ❌ 不传 tools、只在 prompt 里写“请联网搜索”—— 模型无联网通道，直接编造过期内容
+ *      （实测答成 2024-05 的旧新闻，且自带看似合理的 BBC 链接，极具迷惑性）。
+ *   ❌ tools: [{"type": "web_search"}]     —— 网关不把 OpenAI 专有格式映射到 Gemini 上游，
+ *      不报错、静默退化成离线作答，同样编造旧闻。这是最危险的一种失败。
+ *   ⚠️ tools: [{"type":"function", …}]     —— 视模型而定：gemini-3.8-flash-high 会返回
+ *      finish_reason=tool_calls 要客户端自己去搜；flash-lite 则直接离线编造。都不是联网。
+ * 因此本工具**硬编码** tools: [{ google_search: {} }]，不接受外部覆盖这个字段。
+ *
+ * 模型分层（同一时刻同一问题实测；只有 owned_by=antigravity 的 Gemini 文本模型可用）：
+ *   带签名链接：gemini-3.1-flash-lite、gemini-3.8-flash-high
+ *   有实时事实、给常规媒体 URL：gemini-pro-agent、gemini-3.1-pro-low、gemini-3.7-flash-high、
+ *     gemini-3-flash、gemini-3.6-flash-high
+ *   零搜索（必须拦掉）：claude-sonnet-4-6 / claude-opus-4-6-thinking（自陈无联网能力）、
+ *     gpt-oss-120b-medium（吐 harmony 伪 tool-call 标记冒充搜索）、
+ *     gemini-3.1-flash-image（日期对、正文和链接是编的，还自曝“此为模拟链接”）。
+ *   owned_by=openai 的那批（gpt-5.x / gpt-6 / codex-*）同样不吃 google_search，会直接说
+ *     自己无法联网——网关只对 antigravity 侧做 grounding 透传。它们要联网请走 web_search。
+ *
+ * 取源指令必须放在 **user 轮**，不能放 system：同一问题下把“请给出来源 URL”写进 system
+ * 时实测返回 0 条链接，追加到 user 消息末尾则稳定拿到签名链接 + 真实媒体 URL。
+ * 故 doGoogleSearch 把 CITE_HINT 拼在 user 内容后面，不发 system 消息。
+ *
  * 无外部依赖（只用 node 内置 + 全局 fetch），不需要 npm install。
  */
 
@@ -78,6 +117,11 @@ const MODEL = process.env.VF_WEB_SEARCH_MODEL || "gpt-5.6-luna";
 // web_search（流式）：总时长上限 + 空闲超时（详见头部注释）
 const TOTAL_TIMEOUT_MS = Number(process.env.VF_WEB_SEARCH_TIMEOUT) > 0 ? Number(process.env.VF_WEB_SEARCH_TIMEOUT) : 600_000;
 const IDLE_TIMEOUT_MS = Number(process.env.VF_WEB_SEARCH_IDLE_TIMEOUT) > 0 ? Number(process.env.VF_WEB_SEARCH_IDLE_TIMEOUT) : 90_000;
+// google_search（Gemini 原生 grounding，流式）：同款双计时器。Google 侧是服务端单轮闭环，
+// 实测 flash 系 1~13s、pro 系 30~40s，故总时长上限给 5 分钟即可，不必像 Responses 那样给 10 分钟。
+const GS_MODEL = process.env.VF_GOOGLE_SEARCH_MODEL || "gemini-3.8-flash-high";
+const GS_TOTAL_TIMEOUT_MS = Number(process.env.VF_GOOGLE_SEARCH_TIMEOUT) > 0 ? Number(process.env.VF_GOOGLE_SEARCH_TIMEOUT) : 300_000;
+const GS_IDLE_TIMEOUT_MS = Number(process.env.VF_GOOGLE_SEARCH_IDLE_TIMEOUT) > 0 ? Number(process.env.VF_GOOGLE_SEARCH_IDLE_TIMEOUT) : 90_000;
 // perplexity_search 单次超时（默认 90s，结构化搜索本身很快）
 const PPLX_SEARCH_TIMEOUT_MS = Number(process.env.PERPLEXITY_SEARCH_TIMEOUT) > 0 ? Number(process.env.PERPLEXITY_SEARCH_TIMEOUT) : 90_000;
 // Pro Search（流式）：同样用「总时长上限 + 空闲超时」双计时器，只要服务端持续推事件就不掐断
@@ -234,6 +278,166 @@ async function doSearch(query: string, creds: Creds, signal?: AbortSignal): Prom
     clearTimeout(totalTimer);
     if (signal) signal.removeEventListener("abort", onAbort);
   }
+}
+
+// ============================================================================
+// Google Search（Gemini 原生 Server-side Grounding，走 CPA 的 Chat Completions）
+// ============================================================================
+
+// 实测跑通 grounding 的模型。不在表里的模型仍允许调用，只是会在结果尾注里标为“未经验证”，
+// 免得网关上了新模型后被这份名单卡死。
+const GS_VERIFIED_MODELS = [
+  "gemini-3.8-flash-high",
+  "gemini-3.1-flash-lite",
+  "gemini-3.7-flash-high",
+  "gemini-3-flash",
+  "gemini-3.6-flash-high",
+  "gemini-3.1-pro-low",
+  "gemini-pro-agent",
+];
+
+// 实测**不通** grounding 的模型：网关只把 google_search 透传给 owned_by=antigravity 的
+// Gemini 文本模型，其余模型传了也白传——运气好的明确拒答（claude-* / gpt-5.x / gpt-6），
+// 运气差的静默编造带链接的旧闻假闻（gpt-oss-* 吐 harmony 伪 tool-call 标记，
+// gemini-*-image 连“此为模拟链接”都写出来了）。后一种比拒答危险得多，故一律拦掉。
+const GS_BLOCKED_MODEL = /^claude-|^gpt-oss-|^gpt-image|^gpt-5|^gpt-6|^codex-|image$/i;
+
+// 取源指令。必须拼在 user 轮末尾——同样一句话放进 system 消息，实测来源链接会整体消失。
+const GS_CITE_HINT = "\n\n请在回答末尾列出你实际引用的来源 URL（保留原始链接，不要编造、不要改写）。";
+
+// 兼容 models.json 的 baseURL 两种写法（以 /v1 结尾，或只写服务根路径）。
+function chatCompletionsUrl(baseURL: string): string {
+  return /\/v1$/i.test(baseURL) ? `${baseURL}/chat/completions` : `${baseURL}/v1/chat/completions`;
+}
+
+type GoogleSearchOutcome = { answer: string; signedLinks: number; ms: number };
+
+// 流式发起一次 Google grounding 搜索。与 doSearch 同款双计时器（收到数据块重置空闲计时，
+// 总时长为硬上限）。tools 字段硬编码，不开放覆盖——其他写法实测都不联网。
+async function doGoogleSearch(
+  query: string,
+  model: string,
+  creds: Creds,
+  signal?: AbortSignal,
+): Promise<GoogleSearchOutcome> {
+  const ctrl = new AbortController();
+  const onAbort = () => ctrl.abort();
+  if (signal) signal.addEventListener("abort", onAbort, { once: true });
+
+  let abortCause: "idle" | "total" | null = null;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  const resetIdle = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => { abortCause = "idle"; ctrl.abort(); }, GS_IDLE_TIMEOUT_MS);
+  };
+  const totalTimer = setTimeout(() => { abortCause = "total"; ctrl.abort(); }, GS_TOTAL_TIMEOUT_MS);
+  resetIdle();
+  const t0 = Date.now();
+
+  try {
+    const res = await fetch(chatCompletionsUrl(creds.baseURL), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${creds.apiKey}`,
+        Accept: "text/event-stream",
+      },
+      body: JSON.stringify({
+        model,
+        stream: true,
+        messages: [{ role: "user", content: query + GS_CITE_HINT }],
+        tools: [{ google_search: {} }],
+      }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`CPA 网关 HTTP ${res.status}: ${body.slice(0, 500)}`);
+    }
+
+    let answer = "";
+    let toolCalls = 0;
+    let failed: string | null = null;
+
+    const ctype = res.headers.get("content-type") || "";
+    if (!ctype.includes("text/event-stream") || !res.body) {
+      // 网关忽略 stream 参数时的降级路径
+      const data: any = await res.json().catch(() => null);
+      const msg = data?.choices?.[0]?.message ?? {};
+      if (typeof msg.content === "string") answer = msg.content;
+      if (Array.isArray(msg.tool_calls)) toolCalls = msg.tool_calls.length;
+      if (data?.error) failed = data.error.message || String(data.error);
+    } else {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      const handleEvent = (jsonStr: string) => {
+        if (!jsonStr || jsonStr === "[DONE]") return;
+        let evt: any;
+        try { evt = JSON.parse(jsonStr); } catch { return; }
+        if (evt?.error) { failed = evt.error.message || String(evt.error); return; }
+        const choice = evt?.choices?.[0];
+        const delta = choice?.delta?.content;
+        if (typeof delta === "string") answer += delta;
+        // 非增量式网关会把整段 content 塞在 message 里，取更长的那份
+        const whole = choice?.message?.content;
+        if (typeof whole === "string" && whole.length > answer.length) answer = whole;
+        if (Array.isArray(choice?.delta?.tool_calls)) toolCalls += choice.delta.tool_calls.length;
+      };
+
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        resetIdle(); // 收到数据块 = 服务端存活
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          const t = line.trim();
+          if (t.startsWith("data:")) handleEvent(t.slice(5).trim());
+        }
+      }
+      if (buffer.trim().startsWith("data:")) handleEvent(buffer.trim().slice(5).trim());
+    }
+
+    if (failed) throw new Error(failed);
+    answer = answer.trim();
+    // 模型只丢回 tool_calls 声明 = 它把 google_search 当成了要客户端代跑的函数，并没有联网。
+    if (!answer && toolCalls > 0) {
+      throw new Error(
+        `模型 ${model} 未走服务端 grounding，只返回了 ${toolCalls} 个 tool_calls 声明（本网关不会替你执行搜索）。` +
+          `请改用已验证的模型，如 ${GS_VERIFIED_MODELS[0]}。`,
+      );
+    }
+    return {
+      answer: answer || "(无搜索结果)",
+      signedLinks: (answer.match(/grounding-api-redirect\//g) || []).length,
+      ms: Date.now() - t0,
+    };
+  } catch (e) {
+    if ((e as any)?.name === "AbortError" && abortCause) {
+      if (abortCause === "idle") {
+        throw new Error(`Google 搜索超时：${Math.round(GS_IDLE_TIMEOUT_MS / 1000)} 秒内网关未推送任何数据（空闲超时），可调大 VF_GOOGLE_SEARCH_IDLE_TIMEOUT`);
+      }
+      throw new Error(`Google 搜索超时：总时长超过 ${Math.round(GS_TOTAL_TIMEOUT_MS / 1000)} 秒上限，可调大 VF_GOOGLE_SEARCH_TIMEOUT`);
+    }
+    throw e;
+  } finally {
+    if (idleTimer) clearTimeout(idleTimer);
+    clearTimeout(totalTimer);
+    if (signal) signal.removeEventListener("abort", onAbort);
+  }
+}
+
+// 给答案追加一行取证尾注：签名重定向链接是“真调通 Google 后端”的最强证据；没有它并不等于
+// 造假（多数 grounded 模型直接给媒体原始 URL），但足够提示 agent 对关键结论再核一次。
+function groundingFootnote(model: string, out: GoogleSearchOutcome): string {
+  const verified = GS_VERIFIED_MODELS.includes(model) ? "" : "；该模型未在本扩展中验证过 grounding，结论请谨慎采信";
+  const evidence = out.signedLinks > 0
+    ? `含 ${out.signedLinks} 条 Google 签名重定向链接（vertexaisearch），确认已走 Google 搜索后端`
+    : "未出现 Google 签名重定向链接（grounded 模型常直接给媒体原始 URL，属正常现象）；关键结论请核实链接可访问";
+  return `\n\n———\n〔google_search｜模型 ${model}｜${(out.ms / 1000).toFixed(1)}s〕${evidence}${verified}。`;
 }
 
 // ============================================================================
@@ -662,7 +866,8 @@ export default async function (pi: ExtensionAPI) {
       "【默认首选・免费】通用联网搜索入口。通过 CPA（CLIProxyAPI）的 GPT-5.6 Luna 联网搜索，返回带来源的实时 prose 答案。" +
       "适用于绝大多数日常搜索：查询最新新闻、实时数据、联网核实事实、获取公开披露文件/页面的真实 URL。" +
       "成本：免费。输入自然语言查询；如需链接可在 query 中要求返回来源 URL。" +
-      "选择建议：除非明确需要多条结构化来源（用 perplexity_search）或复杂多步深度研究（用 perplexity_pro_search），否则优先用本工具。",
+      "选择建议：除非明确需要多条结构化来源（用 perplexity_search）或复杂多步深度研究（用 perplexity_pro_search），否则优先用本工具。" +
+      "另有同样免费的 google_search（Google 后端 grounding，通常更快、更擅长当天时效性问题）；两者可互相印证。",
     parameters: {
       type: "object",
       properties: {
@@ -691,6 +896,77 @@ export default async function (pi: ExtensionAPI) {
         }
         return {
           content: [{ type: "text", text: `CPA 联网搜索失败：${e instanceof Error ? e.message : String(e)}` }],
+          isError: true,
+        };
+      }
+    },
+  });
+
+  // --------------------------------------------------------------------------
+  // Google Search（Gemini 原生 Server-side Grounding，免费，走同一个 CPA 网关）
+  // --------------------------------------------------------------------------
+  pi.registerTool({
+    name: "google_search",
+    label: "Google Search (CPA Gemini Grounding, 免费)",
+    description:
+      "【与 web_search 并列的免费首选】通过 CPA 网关调 Gemini 原生 Google Search grounding：Google 服务端自动检索、" +
+      "抓网页、合成证据，一次往返直接返回已结合搜索结果写好的答案，常附带 vertexaisearch 签名来源链接。" +
+      "成本：免费。速度：flash 系通常 1~15 秒，pro 系可能 30~40 秒。" +
+      "选择建议：日常实时查询（今天的新闻、当前日期、刚发生的事件、时效性强的事实）优先用本工具；" +
+      "它与 web_search 后端不同（Google vs OpenAI），关键结论可以两边互相印证。" +
+      "需要多条结构化可过滤来源用 perplexity_search，需要多步深度推理用 perplexity_pro_search。",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "自然语言搜索查询（中文/英文均可）。工具会自动追加“列出实际引用来源 URL”的要求，无需自己写。",
+        },
+        model: {
+          type: "string",
+          description:
+            "可选，覆盖默认模型（默认 gemini-3.8-flash-high，快且会带签名来源链接）。" +
+            "需要跨多来源交叉印证的复杂问题可传 gemini-pro-agent（最强但慢，约 30~40 秒）；" +
+            "只要最快回答可传 gemini-3.1-flash-lite。" +
+            "注意：claude-* / gpt-oss-* / 图像模型在本网关不支持 grounding，会被直接拒绝。",
+        },
+      },
+      required: ["query"],
+    },
+    async execute(_toolCallId: string, params: any, signal?: AbortSignal) {
+      const creds = readProviderCreds();
+      if ("error" in creds) {
+        return { content: [{ type: "text", text: `Google 搜索不可用：${creds.error}` }], isError: true };
+      }
+      const query = String(params?.query ?? "").trim();
+      if (!query) {
+        return { content: [{ type: "text", text: "query 不能为空" }], isError: true };
+      }
+      const model = String(params?.model ?? "").trim() || GS_MODEL;
+      if (GS_BLOCKED_MODEL.test(model)) {
+        return {
+          content: [{
+            type: "text",
+            text:
+              `模型 ${model} 在本网关不支持 Google grounding：传了 google_search 也不会联网，` +
+              `轻则明确拒答、重则静默编造带链接的过期内容。` +
+              `请改用已验证的模型，如 ${GS_VERIFIED_MODELS.slice(0, 3).join(" / ")}。`,
+          }],
+          isError: true,
+        };
+      }
+      try {
+        const out = await doGoogleSearch(query, model, creds, signal);
+        return {
+          content: [{ type: "text", text: out.answer + groundingFootnote(model, out) }],
+          isError: false,
+        };
+      } catch (e) {
+        if ((e as any)?.name === "AbortError") {
+          return { content: [{ type: "text", text: "Google 搜索已取消或超时" }], isError: true };
+        }
+        return {
+          content: [{ type: "text", text: `Google 搜索失败：${e instanceof Error ? e.message : String(e)}` }],
           isError: true,
         };
       }
