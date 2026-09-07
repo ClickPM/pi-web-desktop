@@ -478,7 +478,9 @@ ipcRenderer.on("pi-web-desktop:update-notice", (_e, notice) => {
     bs.borderTop = "1px solid var(--border, rgba(0,0,0,0.06))";
     bs.pointerEvents = "none"; // only the chips are interactive (set below)
 
-    // Left-aligned (marginRight:auto) — the active workspace's OKF knowledge base.
+    // Left-aligned group: the reload button (it carries marginRight:auto) and the
+    // active workspace's OKF knowledge base.
+    bar.appendChild(buildReloadChip());
     bar.appendChild(buildWikiChip());
     bar.appendChild(buildTotalChip());
     bar.appendChild(buildSep());
@@ -746,9 +748,81 @@ ipcRenderer.on("pi-web-desktop:update-notice", (_e, notice) => {
     return chip;
   }
 
+  // Reload button: the browser-style ⟳ at the far left of the strip. The 文件
+  // menu already has 重新加载 (Ctrl+R), but `autoHideMenuBar` keeps that out of
+  // sight, so this is the visible affordance for the same action — handy after
+  // an embedded-server restart or when the page wedges. Icon-only and set apart
+  // from the right-hand group because it ACTS rather than reporting a count.
+  // It carries marginRight:auto (the wiki chip used to) as the first child.
+  function buildReloadChip() {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.setAttribute("aria-label", "重新加载页面");
+    chip.title = "重新加载 (Ctrl+R)";
+    const cs = chip.style;
+    cs.pointerEvents = "auto";
+    cs.marginRight = "auto"; // push every other chip to the right
+    cs.display = "flex";
+    cs.alignItems = "center";
+    cs.justifyContent = "center";
+    cs.cursor = "pointer";
+    cs.border = "none";
+    cs.background = "transparent";
+    cs.color = "var(--text-muted, #6b7280)";
+    cs.fontFamily = UI;
+    cs.fontSize = "14px";
+    cs.lineHeight = "1";
+    cs.padding = "5px 8px";
+    cs.borderRadius = "0"; // square Metro chip
+    cs.transition = "background .15s ease, color .15s ease";
+    chip.addEventListener("mouseenter", () => {
+      chip.style.background = "color-mix(in srgb, var(--text, #1a1a1a) 8%, transparent)";
+      chip.style.color = "var(--text, #1a1a1a)";
+    });
+    chip.addEventListener("mouseleave", () => {
+      chip.style.background = "transparent";
+      chip.style.color = "var(--text-muted, #6b7280)";
+    });
+
+    const glyph = document.createElement("span");
+    glyph.textContent = "⟳";
+    glyph.style.display = "inline-block"; // transformable (the spin below)
+    glyph.style.fontSize = "15px";
+
+    let reloading = false;
+    chip.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (reloading) return; // the page is already tearing down
+      reloading = true;
+      if (!reduceMotion) {
+        try {
+          glyph.animate([{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }], {
+            duration: 600,
+            iterations: Infinity,
+            easing: "linear",
+          });
+        } catch {
+          /* WAAPI unavailable — the reload still happens */
+        }
+      }
+      try {
+        // Main-process reload so it ignores the HTTP cache (see main.js).
+        const r = await ipcRenderer.invoke("pi-web-desktop:reload-page");
+        if (!r || r.ok !== true) throw new Error((r && r.error) || "reload refused");
+      } catch {
+        // Older shell without the IPC handler (or it threw) — plain reload.
+        location.reload();
+      }
+    });
+
+    chip.appendChild(glyph);
+    chips.reload = { el: chip, glyph };
+    return chip;
+  }
+
   // Wiki chip: concept count of the ACTIVE workspace's OKF knowledge base.
-  // Clicking opens a popover (domain breakdown + "打开知识图谱" action). Left-
-  // aligned via marginRight:auto so it sits opposite the right-hand chip group.
+  // Clicking opens a popover (domain breakdown + "打开知识图谱" action). Sits in the
+  // left-hand group, after the reload button that now carries marginRight:auto.
   function buildWikiChip() {
     const category = "wiki";
     const chip = document.createElement("button");
@@ -756,7 +830,6 @@ ipcRenderer.on("pi-web-desktop:update-notice", (_e, notice) => {
     chip.setAttribute("aria-label", "知识库（OKF）");
     const cs = chip.style;
     cs.pointerEvents = "auto";
-    cs.marginRight = "auto"; // push the rest of the bar to the right
     cs.display = "flex";
     cs.alignItems = "center";
     cs.gap = "6px";

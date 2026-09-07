@@ -983,6 +983,22 @@ ipcMain.handle("pi-web-desktop:dashboard-status", async () => {
   }
 });
 
+// Backend for the dashboard bar's reload button. Same effect as the file
+// menu's 重新加载 (Ctrl+R), reachable without unhiding the menu bar. The
+// reload is driven from the main process (rather than location.reload() in
+// the page) so it ignores the HTTP cache — after an embedded-server restart
+// the page must not come back from a stale cache. e.sender is the webContents
+// that asked, so this stays correct for any window the bar is injected into.
+ipcMain.handle("pi-web-desktop:reload-page", (e) => {
+  try {
+    e.sender.reloadIgnoringCache();
+    return { ok: true };
+  } catch (err) {
+    dbg(`reload-page error ${(err && err.message) || err}`);
+    return { ok: false, error: String((err && err.message) || err) };
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Tools (the live session's tool registry)
 // ---------------------------------------------------------------------------
