@@ -1,6 +1,7 @@
 # Electron wrapper
 node_modules/
 dist/
+package-lock.json
 
 # Build inputs that are regenerated (see README):
 #  - vendor/node  : bundled Node.js runtime (downloaded)
@@ -43,3 +44,4 @@ __pycache__/
 .DS_Store
 Thumbs.db
 *.log
+.sessions/
