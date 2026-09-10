@@ -1,5 +1,5 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">Pi&amp;Dsh App Icon</title>
+  <title id="title">Pi Dsh App Icon</title>
   <desc id="desc">A split app tile: the Pi geometric monogram on a light field, the DeepSeek Harness whale on a dark field. The split is what keeps it readable at small sizes, where two marks on one background blur together. Both halves are monochrome on purpose: Harness brands itself black-on-light / white-on-dark, so a coloured half would read as the DeepSeek model brand instead.</desc>
   <defs>
     <linearGradient id="tileGradient" x1="188" y1="126" x2="836" y2="908" gradientUnits="userSpaceOnUse">

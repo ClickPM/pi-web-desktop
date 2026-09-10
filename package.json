@@ -1,6 +1,6 @@
 {
   "name": "pi-web-desktop",
-  "productName": "Pi&Dsh",
+  "productName": "Pi Dsh",
   "version": "0.3.1",
   "description": "Standalone desktop application wrapping pi-web (Electron). Bundles the pi-web Next.js server and a Chromium window into a single app.",
   "license": "MIT",

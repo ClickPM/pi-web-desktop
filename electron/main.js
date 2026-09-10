@@ -1224,7 +1224,7 @@ function createWindow() {
     backgroundColor: "#0A0A0A", // pi-web Metro dark canvas (--bg) — avoids a pre-paint flash
     autoHideMenuBar: true,
     title: "Pi Agent",
-    // NOT the app icon. The app ships as "Pi&Dsh" and its exe/shortcut carry
+    // NOT the app icon. The app ships as "Pi Dsh" and its exe/shortcut carry
     // the combined mark, but a WINDOW's icon is what Windows shows in the
     // taskbar — so the running pi-web window identifies itself with the Pi
     // mark alone, while the dsh choice starts a separate application that
@@ -1314,16 +1314,26 @@ function writeLaunchPref(target) {
 }
 
 /**
- * One-time state carry-over for the "Pi Agent" -> "Pi&Dsh" rename.
+ * One-time state carry-over across product renames.
  *
- * Electron derives userData from productName, so renaming the product moves it
- * from %APPDATA%\Pi Agent to %APPDATA%\Pi&Dsh and the shell wakes up with no
- * memory. Most of what is lost is cosmetic, but two entries are not:
+ * Electron derives userData from productName, so every rename moves it and the
+ * shell wakes up with no memory. This shell has been renamed twice — "Pi Agent"
+ * -> "Pi&Dsh" -> "Pi Dsh" (the ampersand was dropped because electron-builder
+ * only uses productName for the installation directory when it matches
+ * /^[-_+0-9a-zA-Z .]+$/, and otherwise falls back to the package name, which
+ * nested the install one level deeper).
+ *
+ * Most of what a rename loses is cosmetic. Two entries are not:
  *   - extensions-state.json — losing it re-runs the first-launch extension
  *     picker over a machine that already has extensions deployed;
  *   - dsh-model-import.json — losing it silently stops the PI_DSH_KEY_* env
  *     injection, so imported providers just fail to authenticate with no error
  *     pointing at the cause.
+ *
+ * LEGACY_USER_DATA_DIRS is ordered NEWEST FIRST and each file is taken from the
+ * first directory that has it, because an intermediate name may hold state the
+ * original never did (the Pi&Dsh directory is where anything written between
+ * the two renames lives).
  *
  * Only this shell's OWN small JSON state is copied. Chromium's directories
  * (Cache, Local Storage, Preferences, ...) are deliberately left behind: they
@@ -1334,6 +1344,7 @@ function writeLaunchPref(target) {
  * since deleted on purpose.
  */
 function migrateLegacyUserData() {
+  const LEGACY_USER_DATA_DIRS = ["Pi&Dsh", "Pi Agent"];
   const STATE_FILES = [
     "launch-preference.json",
     "extensions-state.json",
@@ -1343,25 +1354,37 @@ function migrateLegacyUserData() {
   ];
   try {
     const now = app.getPath("userData");
-    const marker = path.join(now, ".migrated-from-pi-agent");
+    const marker = path.join(now, ".migrated-user-data");
     if (fs.existsSync(marker)) return;
-    const legacy = path.join(path.dirname(now), "Pi Agent");
-    if (path.resolve(legacy) === path.resolve(now) || !fs.existsSync(legacy)) return;
+
+    const parent = path.dirname(now);
+    const sources = LEGACY_USER_DATA_DIRS.map((name) => path.join(parent, name)).filter(
+      (dir) => path.resolve(dir) !== path.resolve(now) && fs.existsSync(dir)
+    );
+    if (!sources.length) return;
 
     fs.mkdirSync(now, { recursive: true });
     const carried = [];
     for (const name of STATE_FILES) {
-      const from = path.join(legacy, name);
       const to = path.join(now, name);
-      // Never overwrite: a file already here was written by the renamed build
-      // and is newer than anything the old directory holds.
-      if (!fs.existsSync(from) || fs.existsSync(to)) continue;
+      // Never overwrite: a file already here was written by the current build
+      // and is newer than anything a legacy directory holds.
+      if (fs.existsSync(to)) continue;
+      const from = sources.map((dir) => path.join(dir, name)).find((candidate) => fs.existsSync(candidate));
+      if (!from) continue;
       fs.copyFileSync(from, to);
-      carried.push(name);
+      carried.push(`${name} <- ${path.basename(path.dirname(from))}`);
     }
-    const summary = carried.join(", ") || "(nothing)";
-    fs.writeFileSync(marker, [`${new Date().toISOString()} from ${legacy}`, `carried: ${summary}`, ""].join("\n"));
-    dbg(`userData migration: carried ${carried.length} file(s) from ${legacy}${carried.length ? ` (${carried.join(", ")})` : ""}`);
+    fs.writeFileSync(
+      marker,
+      [
+        `${new Date().toISOString()}`,
+        `searched: ${sources.map((d) => path.basename(d)).join(", ")}`,
+        `carried: ${carried.join("; ") || "(nothing)"}`,
+        "",
+      ].join(require("os").EOL)
+    );
+    dbg(`userData migration: carried ${carried.length} file(s) [${carried.join("; ")}]`);
   } catch (e) {
     // Never block startup on this: the worst case is the old defaults are gone.
     dbg(`userData migration skipped: ${(e && e.message) || e}`);
@@ -1377,7 +1400,7 @@ function openLauncher() {
     autoHideMenuBar: true,
     // The chooser is the APP, before either identity has been picked, so it
     // is the one window that wears the combined mark and the product name.
-    title: "Pi&Dsh",
+    title: "Pi Dsh",
     icon: path.join(__dirname, "..", "build", "icon.png"),
     webPreferences: {
       contextIsolation: true,
@@ -1481,6 +1504,24 @@ async function boot() {
   openLauncher();
 }
 
+/**
+ * AppUserModelID for the pi runtime.
+ *
+ * WHY THIS EXISTS AT ALL. A BrowserWindow icon is NOT what Windows puts on the
+ * taskbar button for an installed app: Windows associates the button with the
+ * Start Menu shortcut that launched it and uses the SHORTCUT's icon, which is
+ * the executable's — i.e. the combined Pi Dsh mark. That is why the per-window
+ * icon shows up in the title bar and in a loose win-unpacked run, and silently
+ * loses to the shortcut once the NSIS installer has created one.
+ *
+ * Declaring an id the shortcut does not carry breaks that association, so the
+ * button falls back to the window icon. The cost is that a pi window no longer
+ * groups under a pinned "Pi Dsh" shortcut — which is the honest outcome: it is
+ * a different runtime, and the chooser (which keeps the default association)
+ * is what represents the app.
+ */
+const PI_APP_USER_MODEL_ID = "com.agegr.piwebdesktop.pi";
+
 async function bootPi() {
   if (win && !win.isDestroyed()) {
     if (win.isMinimized()) win.restore();
@@ -1488,6 +1529,9 @@ async function bootPi() {
     return;
   }
   dbg(`boot start; isPackaged=${app.isPackaged} userData=${app.getPath("userData")}`);
+  // Must precede createWindow(): the association is resolved when the window
+  // first appears on the taskbar, not when the id is set.
+  if (process.platform === "win32") app.setAppUserModelId(PI_APP_USER_MODEL_ID);
   createWindow();
   try {
     // Order matters. Recovery runs before ANY call to runtimeDir(), because an

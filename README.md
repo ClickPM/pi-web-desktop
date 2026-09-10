@@ -46,7 +46,9 @@ pi-web-desktop/
 
 ## 应用身份与图标
 
-应用叫 **Pi&Dsh**（`productName`，`package.json` 和 `electron-builder.yml` 各一份——前者决定 dev 模式的 `userData`，后者决定打包产物）。`appId` 保持 `com.agegr.piwebdesktop` **不变**，这样新安装包是就地升级旧的 Pi Agent，而不是并排装两份。
+应用叫 **Pi Dsh**（`productName`，`package.json` 和 `electron-builder.yml` 各一份——前者决定 dev 模式的 `userData`，后者决定打包产物）。`appId` 保持 `com.agegr.piwebdesktop` **不变**，这样新安装包是就地升级，而不是并排装两份。
+
+> **名字必须匹配 `/^[-_+0-9a-zA-Z .]+$/`。** electron-builder 只在 `productName` 满足这个正则时拿它当安装目录名，否则回退用 package.json 的 `name`，NSIS 的 `instFilesPre` 发现 `$INSTDIR` 里不含那个串就再追加一层。中途用过的 `Pi&Dsh` 就是这么装进 `D:\Program Files\Pi&Dsh\pi-web-desktop\` 的（`&` 不在白名单里）。顺带 `&` 在 `cmd` 里还是命令分隔符，exe 路径不加引号就断。
 
 三套图标，`build/_make_icons.js` 从 SVG 一次生成全部 PNG + ICO（借 pi runtime 的 sharp，外壳不新增依赖；ICO 是手搓的 PNG-compressed 格式，sharp 没有 ico 编码器）：
 
@@ -60,9 +62,8 @@ pi-web-desktop/
 
 **关于配色**：Harness 的品牌是**单色**的，不是 DeepSeek 模型那个蓝。它自己的 `favicon.svg` 里写得很清楚——`@media(prefers-color-scheme:light){fill:#000}` / `dark{fill:#fff}`，品牌蓝只是给不认媒体查询的 Safari 兜底。所以两个图标里的鲸鱼都是白色配深灰底，没有用蓝色。深色面比纯黑提亮了一档并加了一圈 16% 白描边，否则近黑 tile 在深色任务栏上会整个融进背景、只剩一条悬空的鲸鱼。tile 占画布 92%（原来只有 81%），任务栏本身还会再加内边距，留白太多会比邻座应用矮一圈。
 
-> **改名的副作用**：Electron 的 `userData` 路径来自 `productName`，所以 `%APPDATA%\Pi Agent` 变成了 `%APPDATA%\Pi&Dsh`。`main.js` 的 `migrateLegacyUserData()` 在启动时一次性搬运本外壳自己的几个小 JSON（`launch-preference` / `extensions-state` / `theme-state` / `dsh-model-import` / `dsh-app-location`），Chromium 自己的目录和 `runtime/` 一律不搬（前者带绝对路径且由 Electron 重建，后者最大 1GB 且按需重新种）。**`dsh-model-import.json` 是必须搬的那个**：丢了它，导入过的提供方会静默失去 `PI_DSH_KEY_*` 注入，表现为认证失败而不是任何指向病因的报错。搬完写一个 `.migrated-from-pi-agent` 标记，不会重复搬。
+> **改名的副作用**：Electron 的 `userData` 路径来自 `productName`，本外壳先后叫过 `Pi Agent` → `Pi&Dsh` → `Pi Dsh`，`%APPDATA%` 下的目录也跟着换了两次。`main.js` 的 `migrateLegacyUserData()` 在启动时一次性搬运本外壳自己的几个小 JSON（`launch-preference` / `extensions-state` / `theme-state` / `dsh-model-import` / `dsh-app-location`），Chromium 自己的目录和 `runtime/` 一律不搬（前者带绝对路径且由 Electron 重建，后者最大 1GB 且按需重新种）。**`dsh-model-import.json` 是必须搬的那个**：丢了它，导入过的提供方会静默失去 `PI_DSH_KEY_*` 注入，表现为认证失败而不是任何指向病因的报错。来源目录按**从新到旧**（`Pi&Dsh` → `Pi Agent`）逐个找，每个文件取第一个找到的——中间那个名字下可能存着最初那个目录没有的状态。搬完写一个 `.migrated-user-data` 标记，不会重复搬。
 
-> **`&` 的小坑**：可执行文件叫 `Pi&Dsh.exe`。在 `cmd` 里不加引号直接敲会被当成命令分隔符（`&` 后面的部分会被当另一条命令），PowerShell 里也要 `& "…\Pi&Dsh.exe"`。文件名本身合法，图形界面上没问题。
 
 ## 启动选择器
 

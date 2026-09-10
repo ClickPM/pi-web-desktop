@@ -1,7 +1,10 @@
 appId: com.agegr.piwebdesktop
-# Quoted because "&" is a YAML indicator character anywhere but mid-scalar, and
-# because the name reaches NSIS, the exe name and %APPDATA% verbatim.
-productName: "Pi&Dsh"
+# Keep this matching /^[-_+0-9a-zA-Z .]+$/. electron-builder only uses
+# productName for the installation directory when it does; otherwise it falls
+# back to the package name and NSIS nests the install one level deeper
+# ("Pi&Dsh" briefly did exactly that: D:\Program Files\Pi&Dsh\pi-web-desktop).
+# The name also reaches the exe filename and %APPDATA% verbatim.
+productName: Pi Dsh
 copyright: Copyright © 2026
 
 directories:
