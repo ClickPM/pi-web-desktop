@@ -197,9 +197,12 @@ function mapProviders(piConfig) {
  * Merge the mapped routes into a dsh settings.yaml, leaving every other
  * section untouched.
  *
- * js-yaml is borrowed from the dsh runtime rather than added as a shell
- * dependency: the importer is only meaningful once that runtime exists, and
- * reusing it keeps the shell dependency-free (electron + electron-builder).
+ * js-yaml is BORROWED from a bundled runtime rather than added as a shell
+ * dependency, which is what keeps this package's dependency list empty
+ * (electron + electron-builder, both dev). The lender is injected because it
+ * changed: it used to be the dsh runtime this shell shipped, and since that
+ * runtime went away — DeepSeek Harness is now upstream's own application — it
+ * is the pi runtime, which carries js-yaml too.
  */
 function mergeIntoSettings(settingsPath, providers, requireFromRuntime) {
   const yaml = requireFromRuntime("js-yaml");

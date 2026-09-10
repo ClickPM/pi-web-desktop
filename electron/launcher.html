@@ -125,7 +125,7 @@
         <div>
           <span class="key">2</span>
           <div class="name">DeepSeek Harness</div>
-          <div class="desc">dsh Web UI，按需启动。会话数据在 <code>~/.dsh</code>，与终端里的 <code>dsh</code> 共用。</div>
+          <div class="desc">打开 DeepSeek Harness 官方桌面端（独立应用，本程序随即退出）。会话与设置在 <code>~/.dsh</code>，与终端里的 <code>dsh</code> 共用。</div>
         </div>
         <div class="meta" id="dsh-meta"></div>
       </button>
@@ -164,7 +164,10 @@
 
       window.piLauncher.info().then((info) => {
         document.getElementById("pi-meta").textContent = info.piVersion ? `pi-web ${info.piVersion}` : "";
-        document.getElementById("dsh-meta").textContent = info.dshVersion ? `dsh ${info.dshVersion}` : "";
+        // An absent version here means the application was not found at all —
+        // say so, because the tile still works (it offers to locate it) and a
+        // blank meta would read as "no version info" rather than "not installed".
+        document.getElementById("dsh-meta").textContent = info.dshVersion ? `dsh ${info.dshVersion}` : "未安装";
       });
     </script>
   </body>

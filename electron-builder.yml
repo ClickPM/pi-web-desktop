@@ -1,5 +1,7 @@
 appId: com.agegr.piwebdesktop
-productName: Pi Agent
+# Quoted because "&" is a YAML indicator character anywhere but mid-scalar, and
+# because the name reaches NSIS, the exe name and %APPDATA% verbatim.
+productName: "Pi&Dsh"
 copyright: Copyright © 2026
 
 directories:
@@ -12,6 +14,15 @@ directories:
 files:
   - electron/**/*
   - package.json
+  # The two icons main.js loads AT RUNTIME for its BrowserWindows. They must be
+  # inside the asar: main.js resolves them as `__dirname/../build/...`, which in a
+  # packaged app is a path INSIDE app.asar, and Electron silently falls back to the
+  # executable's icon when the file is missing — so before this line the per-window
+  # icons worked in dev and quietly did nothing once installed. icon-dsh.png is not
+  # listed: nothing in this shell loads it, it is an input to the DeepSeek Harness
+  # build (see the icon table in the README).
+  - build/icon.png
+  - build/icon-pi.png
 
 extraResources:
   # Bundled Node.js runtime (node.exe + npm) -> resources/node
@@ -37,21 +48,22 @@ extraResources:
       - "**/*"
       - "!**/*.map"
       - "!**/.cache/**"
-  # DeepSeek Harness runtime seed (npm prod install of @deepseek-ai/dsh) ->
-  # resources/runtime-seed-dsh. Started ON DEMAND by electron/features/dsh.js,
-  # never at boot. Prebuilt native addons for OTHER platforms are dropped: the
-  # installer is win-x64 only and node-pty alone ships four foreign copies.
-  - from: runtime-seed-dsh
-    to: runtime-seed-dsh
-    filter:
-      - "**/*"
-      - "!**/*.map"
-      - "!**/.cache/**"
-      - "!**/prebuilds/darwin-*/**"
-      - "!**/prebuilds/linux-*/**"
-      - "!**/prebuilds/android-*/**"
-      - "!**/prebuilds/win32-arm64/**"
-      - "!**/prebuilds/win32-ia32/**"
+  # DeepSeek Harness is NOT bundled. It used to ship here as a second npm
+  # runtime seed (@deepseek-ai/dsh, ~270MB) that this shell started as
+  # `dsh web`; upstream now ships its own Electron application, so the dsh
+  # launch path is a hand-off to that instead (electron/features/dsh.js).
+  #
+  # To ship it inside this installer anyway, build upstream's win-x64 app and
+  # uncomment the block below — features/dsh.js already looks in that slot,
+  # ahead of a user-level or system-level install. It costs ~723MB unpacked
+  # (Electron ~366 + its dsh seed ~249 + its bundled node/pnpm ~106), which is
+  # why it is opt-in rather than the default.
+  #
+  # - from: ../deepseek-harness/apps/desktop/.desktop-build/targets/win-x64/artifacts/win-unpacked
+  #   to: dsh-app
+  #   filter:
+  #     - "**/*"
+
   # Bundled pi extensions (single-file .ts + manifest.json + shared deps) ->
   # resources/extensions-seed. manifest.json catalogues the set; the first-run
   # picker lets the user choose which ones get deployed into

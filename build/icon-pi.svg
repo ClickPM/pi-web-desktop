@@ -1,0 +1,56 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Pi Agent App Icon</title>
+  <desc id="desc">The Pi monogram tile, unchanged. Kept as its own asset because the app icon is now the combined Pi&amp;Dsh mark, while the pi-web WINDOW still identifies itself with this one.</desc>
+  <defs>
+    <linearGradient id="tileGradient" x1="188" y1="126" x2="836" y2="908" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FBF8F1"/>
+      <stop offset="0.52" stop-color="#F0EBE2"/>
+      <stop offset="1" stop-color="#E3DCD1"/>
+    </linearGradient>
+    <linearGradient id="markGradient" x1="280" y1="280" x2="760" y2="744" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#151718"/>
+      <stop offset="1" stop-color="#050606"/>
+    </linearGradient>
+    <filter id="tileShadow" x="54" y="60" width="916" height="920" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="10" stdDeviation="13" flood-color="#000000" flood-opacity="0.14"/>
+      <feDropShadow dx="0" dy="1" stdDeviation="1.4" flood-color="#FFFFFF" flood-opacity="0.78"/>
+    </filter>
+    <filter id="markShadow" x="250" y="250" width="540" height="524" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="12" stdDeviation="10" flood-color="#000000" flood-opacity="0.28"/>
+      <feDropShadow dx="0" dy="1" stdDeviation="1" flood-color="#FFFFFF" flood-opacity="0.16"/>
+    </filter>
+    <clipPath id="tileClip">
+      <rect x="96" y="96" width="832" height="832" rx="190"/>
+    </clipPath>
+  </defs>
+
+  <!-- Scale the whole 1024 design up about its centre so the tile fills ~92%
+       of the canvas instead of 81%. The inherited 9.4% transparent margin is
+       what made this read a size smaller than neighbouring apps in the Windows
+       taskbar, which adds padding of its own. Wrapping instead of moving every
+       coordinate keeps the artwork's internal proportions exactly as drawn. -->
+  <g transform="translate(-68.9 -68.9) scale(1.1346)">
+
+
+  <!-- The canvas outside the rounded app tile is transparent. -->
+  <g filter="url(#tileShadow)">
+    <rect x="96" y="96" width="832" height="832" rx="190" fill="url(#tileGradient)"/>
+    <rect x="98" y="98" width="828" height="828" rx="188" stroke="#FFFFFF" stroke-opacity="0.64" stroke-width="4"/>
+    <rect x="98" y="98" width="828" height="828" rx="188" stroke="#CFC7BC" stroke-opacity="0.36" stroke-width="2"/>
+  </g>
+
+  <g clip-path="url(#tileClip)">
+    <path d="M150 100H874V104C816 122 756 131 692 131H332C268 131 208 122 150 104V100Z" fill="#FFFFFF" opacity="0.22"/>
+    <path d="M184 862C248 890 322 904 406 904H618C702 904 776 890 840 862" stroke="#B9B1A6" stroke-opacity="0.23" stroke-width="5" stroke-linecap="round"/>
+  </g>
+
+  <!-- Corrected Pi monogram. Based on the original 4x4 Pi logo grid. -->
+  <g filter="url(#markShadow)" fill="url(#markGradient)" shape-rendering="crispEdges">
+    <rect x="280" y="280" width="348" height="116"/>
+    <rect x="280" y="280" width="116" height="464"/>
+    <rect x="512" y="280" width="116" height="232"/>
+    <rect x="280" y="512" width="232" height="116"/>
+    <rect x="644" y="512" width="116" height="232"/>
+  </g>
+  </g>
+</svg>

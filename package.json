@@ -1,6 +1,6 @@
 {
   "name": "pi-web-desktop",
-  "productName": "Pi Agent",
+  "productName": "Pi&Dsh",
   "version": "0.3.1",
   "description": "Standalone desktop application wrapping pi-web (Electron). Bundles the pi-web Next.js server and a Chromium window into a single app.",
   "license": "MIT",
@@ -9,7 +9,6 @@
   "scripts": {
     "start": "electron .",
     "seed": "cd runtime-seed && npm install @agegr/pi-web@latest --omit=dev --registry=https://registry.npmmirror.com",
-    "seed:dsh": "cd runtime-seed-dsh && npm install --omit=dev --registry=https://registry.npmmirror.com",
     "seed:extensions": "cd extensions-seed && npm ci --omit=dev --registry=https://registry.npmmirror.com",
     "seed:node": "powershell -ExecutionPolicy Bypass -File scripts/seed-node.ps1",
     "seed:python": "powershell -ExecutionPolicy Bypass -File scripts/seed-python.ps1",

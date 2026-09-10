@@ -264,13 +264,6 @@ const PI_WEB_REQUIRED_FILES = [
   { rel: ["react", "package.json"], label: "react" },
 ];
 
-const DSH_REQUIRED_FILES = [
-  { rel: ["@deepseek-ai", "dsh", "package.json"], label: "dsh package" },
-  { rel: ["@deepseek-ai", "dsh", "lib", "bin.js"], label: "dsh CLI entry" },
-  { rel: ["@deepseek-ai", "dsh-web-app", "cordis.patch.yml"], label: "dsh web bundle layer" },
-  { rel: ["@deepseek-ai", "dsh-web-frontend", "dist", "index.html"], label: "dsh prebuilt frontend" },
-];
-
 /**
  * Verify a runtime tree — used BOTH as the boot preflight and as the acceptance
  * test for a freshly staged install. Same checks in both roles, so anything
@@ -287,10 +280,11 @@ async function verifyRuntime(ctx, dir) {
   const nm = path.join(dir, "node_modules");
 
   // --- structural checks (cheap, catch a wholesale-missing install) ---
-  // The list is per-runtime: this guard now serves both the pi-web runtime and
-  // the dsh one, which share every other mechanism but obviously not their
-  // landmark files. `ctx.requiredFiles` overrides; the default is pi-web's, so
-  // callers written before the second runtime existed keep their behaviour.
+  // The landmark list stays injectable even though pi-web is once again the
+  // only bundled runtime: `ctx.requiredFiles` is what let this guard serve a
+  // second runtime (dsh, until its launch path moved to upstream's own
+  // application) without forking any of the surrounding machinery, and it is
+  // the seam any future one would use. The default is pi-web's.
   const required = ctx.requiredFiles || PI_WEB_REQUIRED_FILES;
   for (const { rel, label } of required) {
     const p = path.join(nm, ...rel);
@@ -553,7 +547,6 @@ async function provisionRuntime(ctx, opts = {}) {
 
 module.exports = {
   PI_WEB_REQUIRED_FILES,
-  DSH_REQUIRED_FILES,
   stagingDir,
   trashDir,
   journalPath,

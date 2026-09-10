@@ -24,27 +24,45 @@ pi-web-desktop/
 │   ├── updater.js      # npm 层:用内置 npm 查询版本 / 装到指定目录(installInto)
 │   ├── runtime-guard.js # 运行时完整性:启动校验、staging 安装、原子换入、崩溃恢复
 │   ├── preload.js      # 最小安全桥(contextIsolation 开启)—— 自定义能力的暴露入口
-│   ├── features/       # dashboard / subagents / dsh(第二运行时) / pi-model-import 等外壳后端逻辑
+│   ├── features/       # dashboard / subagents / dsh(交给官方桌面端) / pi-model-import 等外壳后端逻辑
 │   ├── launcher.html + launcher-preload.js   # 启动选择器(开 Pi Agent 还是 DeepSeek Harness)
-│   ├── loading.html / dsh-loading.html / updating.html / healing.html / error.html
+│   ├── loading.html / updating.html / healing.html / error.html
 │   └── ui/             # ★ 自定义能力的前端页面(可选,见「开发约束」)
 ├── vendor/node/        # 内置 Node.js 运行时(node.exe + npm) → resources/node            ← 构建输入(npm run seed:node)
 ├── vendor/python/      # 内置 Python(python-build-standalone + ppt-master 依赖预装) → resources/python ← 构建输入(npm run seed:python)
 ├── runtime-seed/       # @agegr/pi-web 的 npm 生产安装(含 .next) → resources/runtime-seed          ← 构建输入(npm run seed)
-├── runtime-seed-dsh/   # @deepseek-ai/dsh 的 npm 生产安装 → resources/runtime-seed-dsh          ← 构建输入(npm run seed:dsh)
-│                       # package.json(版本钉子)已入库,node_modules/lockfile 是构建输入
 ├── extensions-seed/    # 默认随装的 13 个 pi 扩展(.ts 源码已入库;node_modules 为构建输入) → resources/extensions-seed
 ├── skills-seed/        # 默认随装的技能(wiki 系列 OKF + ppt-master,源码已入库) → resources/skills-seed
-├── scripts/            # seed-node.ps1(供给 vendor/node,内含 dsh 要求的版本下限)
+├── scripts/            # seed-node.ps1(供给 vendor/node,内含沿用下来的版本下限)
 │                       # + seed-python.ps1 + vendor-python-requirements.txt(供给 vendor/python)
 │                       # + test-runtime-guard.js(运行时守卫 / 版本比较回归测试,npm run test:guard)
-├── build/              # 应用图标(icon.svg / icon.png / icon.ico)
+├── build/              # 三套应用图标的 SVG 源 + 生成脚本(_make_icons.js)与产物(png/ico)
 ├── electron-builder.yml
 └── package.json
 ```
 
 > **构建输入 vs 入库源码**:`vendor/`、`runtime-seed/`、`extensions-seed/node_modules` 都体积大、已 gitignore,需按[下文](#从零准备构建输入)重新准备。本地若存在 `pi-web/` 目录,那是已退役的 fork 工作副本(`cking000bigdemon/pi-web`,曾发布为 `@cking000/pi-web`),桌面端已回归上游包,不再是构建输入。
 > **已纳入版本库**:`extensions-seed/` 的 13 个 `.ts` 扩展源码 + `manifest.json`(扩展目录清单)、`skills-seed/` 全部技能源码(含 `ppt-master` 的模板/脚本)、`scripts/` 供给脚本——这些是产品源码,直接随仓库走。
+
+## 应用身份与图标
+
+应用叫 **Pi&Dsh**（`productName`，`package.json` 和 `electron-builder.yml` 各一份——前者决定 dev 模式的 `userData`，后者决定打包产物）。`appId` 保持 `com.agegr.piwebdesktop` **不变**，这样新安装包是就地升级旧的 Pi Agent，而不是并排装两份。
+
+三套图标，`build/_make_icons.js` 从 SVG 一次生成全部 PNG + ICO（借 pi runtime 的 sharp，外壳不新增依赖；ICO 是手搓的 PNG-compressed 格式，sharp 没有 ico 编码器）：
+
+| 资源 | 用在哪 | 长什么样 |
+|---|---|---|
+| `icon.*` | 应用身份：exe / 安装包 / 快捷方式 / 启动选择器窗口 | 左右对分——左边奶白底黑 Pi，右边深灰底白鲸 |
+| `icon-pi.*` | pi-web 窗口 + 扩展管理子窗口 | 原来的 Pi 图标，未改 |
+| `icon-dsh.*` | 交给官方桌面端构建用（`win.icon`）| 深灰底白鲸 |
+
+**为什么窗口图标和应用图标不同**：Windows 任务栏显示的是**窗口**的图标，不是 exe 的。所以选 Pi 时任务栏是纯 Pi 标；选 dsh 时本进程已经退出，任务栏上那个是官方端自己的窗口——上游没给它设图标（构建日志原话 `default Electron icon is used`），所以我们在构建它时用 `icon-dsh.ico` 补上，否则它会顶着 Electron 默认的原子图标。只有启动选择器戴合成图标，因为那一刻还没选身份。
+
+**关于配色**：Harness 的品牌是**单色**的，不是 DeepSeek 模型那个蓝。它自己的 `favicon.svg` 里写得很清楚——`@media(prefers-color-scheme:light){fill:#000}` / `dark{fill:#fff}`，品牌蓝只是给不认媒体查询的 Safari 兜底。所以两个图标里的鲸鱼都是白色配深灰底，没有用蓝色。深色面比纯黑提亮了一档并加了一圈 16% 白描边，否则近黑 tile 在深色任务栏上会整个融进背景、只剩一条悬空的鲸鱼。tile 占画布 92%（原来只有 81%），任务栏本身还会再加内边距，留白太多会比邻座应用矮一圈。
+
+> **改名的副作用**：Electron 的 `userData` 路径来自 `productName`，所以 `%APPDATA%\Pi Agent` 变成了 `%APPDATA%\Pi&Dsh`。`main.js` 的 `migrateLegacyUserData()` 在启动时一次性搬运本外壳自己的几个小 JSON（`launch-preference` / `extensions-state` / `theme-state` / `dsh-model-import` / `dsh-app-location`），Chromium 自己的目录和 `runtime/` 一律不搬（前者带绝对路径且由 Electron 重建，后者最大 1GB 且按需重新种）。**`dsh-model-import.json` 是必须搬的那个**：丢了它，导入过的提供方会静默失去 `PI_DSH_KEY_*` 注入，表现为认证失败而不是任何指向病因的报错。搬完写一个 `.migrated-from-pi-agent` 标记，不会重复搬。
+
+> **`&` 的小坑**：可执行文件叫 `Pi&Dsh.exe`。在 `cmd` 里不加引号直接敲会被当成命令分隔符（`&` 后面的部分会被当另一条命令），PowerShell 里也要 `& "…\Pi&Dsh.exe"`。文件名本身合法，图形界面上没问题。
 
 ## 启动选择器
 
@@ -84,23 +102,33 @@ pi-web-desktop/
 
 数据目录沿用 pi 的 `~/.pi/agent`（会话、`models.json`、模型凭证），与终端 `pi`、全局 `pi-web` 共享。
 
-## DeepSeek Harness（第二个内置运行时，按需启动）
+## DeepSeek Harness（交给官方桌面端）
 
-菜单 `App → DeepSeek Harness` 打开 [dsh](https://github.com/deepseek-ai/deepseek-harness)。它与 pi-web 形态同构（`dsh web --host 127.0.0.1 --port <n>` 起 loopback HTTP 服务），因此复用了外壳全部现成机制：内置 node、种子拷贝、`runtime-guard` 的 staging+原子换入、空闲端口、就绪探测、独立窗口。实现全部在 `electron/features/dsh.js`。
+菜单 `App → DeepSeek Harness`（或启动器的第 2 块磁贴）打开 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 官方桌面端。**本项目不再内置 dsh 运行时，也不再自己套它的 Web UI。**
 
-**按需启动**：boot 时**不**拉起，第一次点菜单才装/起；**关掉 dsh 窗口即停服务**（dsh 插件树很大，为一个可能一周开一次的功能常驻内存不划算）。实测冷启（全新 `$DSH_HOME`，要写 profile + 约 250 个 junction）约 39s，之后温启动约 2.4s。
+原来的做法是把 `@deepseek-ai/dsh` 当第二个运行时种子随装（`runtime-seed-dsh/`，约 270MB），起 `dsh web --host 127.0.0.1 --port <n>`，再拿一个 BrowserWindow 指过去。上游现在自带 Electron 应用（`@deepseek-ai/dsh-desktop`），而它**不是**同一个 Web 服务的另一层壳，是替代品：
 
-与 pi 窗口刻意**不共享**的五件事：
+- **不开监听端口**。内置 Node 子进程 + framed byte pipes + `dsh-app://` 协议承载 Fetch 流量和前端资源——外壳这边那套空闲端口 / 就绪探测 / launch token，在对面没有对应物。
+- **独占 `$DSH_HOME/profiles/desktop`**，自带 pnpm store，以及 staging → 健康检查 → 激活 → 回滚的整条事务路径。它的 bundles 前两项被校验死为 `dsh-base` + `dsh-web-app`，插件只收 `registry.npmjs.org` 上的注册表包。
+- **版本与它携带的 dsh 锁死**（"a dsh upgrade is a Desktop release"），更新由它自己负责。
 
-1. **不挂 preload**。`preload.js` 的注入只用 `location.protocol === "http:"` 把关，而 dsh 页面同样是 `http://127.0.0.1`，挂上去会把 pi 的底部 dashboard 和 Tools chip 注入进来——那些 IPC 读的是 `~/.pi`，显示的数字与窗口内容毫无关系。dsh 也确实不需要外壳提供任何东西（它的目录选择器从自己的宿主进程拉起 Windows 原生 `IFileOpenDialog`）。
-2. **不写 `nativeTheme`**。`themeSource` 是 app 全局的，第二个窗口去驱动它会连带把 pi 窗口的原生标题栏刷成另一套配色。主题仍由主窗口独占（`features/native-theme.js`）。
-3. **自己一把锁**。dsh 的运行时目录与 pi 的相互独立，更新/自愈各自串行，互不阻塞。
-4. **版本钉死，且没有自动更新**。`runtime-seed-dsh/package.json` 写的是精确版本而非 `^`：dsh 处于 developer preview，README 明说 rc 之间可能不兼容。pi-web 那套「启动后自动静默检查」**没有**接到 dsh 上，只有菜单 `检查 DeepSeek Harness 更新…` 会去查、并在确认后才装。
-5. **自己一个 session 分区**（`persist:dsh`）。0.1.2-rc.1 起 dsh 会给浏览器发签名 cookie，而该 cookie 是 `127.0.0.1` 的 host-only cookie——**Chromium 的 cookie 不按端口隔离**，放在默认 session 里它会跟着每一个 pi-web 请求一起发出去，且每换一个端口（每次开 dsh）就多攒一条。分区一隔，dsh 的凭据就只留在 dsh 窗口里。
+再并一个自组的 dsh 在旁边，等于两个外壳抢同一个 `$DSH_HOME`、同一个产品两套更新故事。所以 dsh 这条路径现在只做一件事：找到那个应用、带上环境把它拉起来、然后本进程退出。实现全部在 `electron/features/dsh.js`。
 
-> **0.1.2-rc.1 的破坏性变更：Web 根路径需要令牌。** 每个 dsh 进程会随机生成一枚 launch token，唯一的入口是 `GET /?token=…` 把它换成签名 cookie 再 303 跳回干净的 `/`；直接访问干净 `/` 一律 401。所以窗口不能再用外壳自己挑的端口拼 URL，必须解析 dsh 在 stdout 上**公告**的那一行（`dsh web: http://127.0.0.1:<port>/?token=…`）。注意 `waitForServer` 对任何 HTTP 响应都算就绪（401 也算），所以它探测成功 ≠ 页面能开——公告行要单独等。解析后 token 会从调试日志和错误弹窗里抹掉；解析不到时回退到裸 origin，正好覆盖 0.1.2-rc.1 之前的版本和用户自行关掉 `printUrl` 的情况。
+**查找顺序**（`resolveApp()`，越靠前越明确）：
 
-> `updater.isNewer()` 原先在第一个 `-` 处截断版本号，`0.1.0-rc.5` 与 `0.1.0-rc.6` 会被判为相等。这对只发正式版的 pi-web 无害，但会让 dsh **永远检查不到更新**（它至今全部版本都是 `X.Y.Z-rc.N` 预发布）。现已改为完整的 semver 预发布比较，回归用例见 `npm run test:guard` 的 `[9]`。
+1. 环境变量 `PI_DESKTOP_DSH_APP`（给 exe 或给它所在目录都行）
+2. 上次通过「选择位置…」记住的路径（存 `userData/dsh-app-location.json`）
+3. `resources/dsh-app/DeepSeek Harness.exe`——随本安装包分发的副本，**默认不打包**
+4. `%LOCALAPPDATA%\Programs\DeepSeek Harness\`
+5. `%ProgramFiles%\DeepSeek Harness\`
+
+都找不到时弹框列出以上位置，并给一个「选择位置…」让你手动指定，选定后记住。
+
+> **上游目前没有发布 Windows 安装包。** 截至 `dsh-v0.1.5-rc.1`，GitHub release 的 assets 全为空，`@deepseek-ai/dsh-desktop` 是 `private: true` 不上 npm，它自己的更新源 `https://download.deepseek.com/_/harness/desktop/stable/win-x64/` 也 404（根域是通的）。所以现阶段要用它，得从 deepseek-harness 检出里自行构建——构建步骤和四个坑（陈旧 `lib/` 产物、GNU tar 吃不下盘符、强制硬件签名、签名中止导致 `resources/runtime/node/` 只拷一半）记在项目记忆 `building-upstream-dsh-desktop-on-windows` 里。产物 `win-unpacked` 约 723MB，首次运行还会往 `$DSH_HOME` 写约 425MB——这就是上面第 3 条那个槽位默认不打包的原因（要打开，把 `electron-builder.yml` 里对应那段解注释）。
+
+**拉起时注入两样东西**：`DSH_HOME`（默认 `~/.dsh`，与终端 `dsh` 共用），以及下一节那套 `PI_DSH_KEY_*` 凭据环境变量。子进程 `detached` + `unref()`，因为外壳的活到此为止——启动器选 dsh 后本进程随即退出，而**退出不会带走 DeepSeek Harness**：它有自己的单实例锁和生命周期，关掉 Pi Agent 不该杀掉你正在用的会话。
+
+> 菜单里**没有**「检查 DeepSeek Harness 更新…」了：上游把 Electron 外壳和它携带的 dsh 绑成一个发布单元，从这里提供更新只会让两者错位。
 
 ### 从 Pi 导入模型配置
 
@@ -108,13 +136,13 @@ pi-web-desktop/
 
 映射：`baseUrl → baseURL`、`thinkingLevelMap → reasoningEfforts`、`api`/`input`/`contextWindow`/`maxTokens` 同名，写进 `$DSH_HOME/settings.yaml` 的 `llm-pi-ai.providers`（其余段落原样保留，改写前自动备份成 `settings.yaml.bak-<时间戳>`）。
 
-**密钥不落 dsh 的盘**：settings 里只写 `apiKeyEnv: PI_DSH_KEY_<PROVIDER>`，真正的 key 在每次启动 dsh 时从 pi 的 `models.json` 现读、经子进程环境注入——dsh 的 credentials-local 把「继承的进程环境」排在自己的托管 store 之上，所以生效且不会写进 `$DSH_HOME/.credentials.yaml`。在 pi 里轮换密钥后无需重新导入。
+**密钥不落 dsh 的盘**：settings 里只写 `apiKeyEnv: PI_DSH_KEY_<PROVIDER>`，真正的 key 在每次由本外壳拉起 DeepSeek Harness 时从 pi 的 `models.json` 现读、经子进程环境注入——dsh 的 credentials-local 把「继承的进程环境」排在自己的托管 store 之上，所以生效且不会写进 `$DSH_HOME/.credentials.yaml`。在 pi 里轮换密钥后无需重新导入。
 
 三类东西**导不过去**，导入前的确认框会逐条列出：
 
 - `cost` 定价信息——dsh 的 `PiAiModelProfile` 没有这个字段。
 - `compat.supportsDeveloperRole` / `supportsStore` / `requiresReasoningContentOnAssistantMessages`——dsh 只暴露 `thinkingFormat` 和 `supportsReasoningEffort`，其余回退到 pi-ai 按 baseURL 的自动探测，私有网关有猜错的可能。
-- `auth.json` 里的**目录型**提供方凭据（如 deepseek）——dsh 自带原生 DeepSeek 适配器，且给目录里没有的 id 造一条无 `api`/`baseURL` 的路由会让 dsh 直接拒绝配置、连启动都起不来。这类只做提示，请在 dsh 的设置→模型里直接填。
+- `auth.json` 里的**目录型**提供方凭据（如 deepseek）——dsh 自带原生 DeepSeek 适配器，且给目录里没有的 id 造一条无 `api`/`baseURL` 的路由会被 dsh 判为不可服务。这类只做提示，请在 dsh 的设置→模型里直接填。（0.1.5 起这种坏路由只保留诊断、不再拖垮整个命名空间，但仍然不会工作。）
 
 > 另外 pi 用 `null` 表示"该思考档位不支持"，而 dsh 认为「声明了就是支持」且除 `off` 外必须给出线上拼写。导入时会把这些 `null` 档位**丢掉**而不是照搬——照搬会让整条路由被拒。
 
@@ -269,12 +297,8 @@ cd ..
 # 2b. 默认扩展的共享依赖(13 个 .ts 扩展源码已入库;此步只装它们的 node_modules)
 npm run seed:extensions
 
-# 2c. DeepSeek Harness 运行时种子(~330MB,首次约 4~10 分钟) —— 装 package.json 里钉死的版本
-npm run seed:dsh
-
 # 3. 内置 Node 运行时(win-x64) —— 全自动
-#    版本下限 22.19 由脚本强制:dsh 会 import node:zlib 的 createZstdDecompress(22.15+)
-#    和 node:module 的 stripTypeScriptTypes(22.13+),旧版直接启动失败
+#    版本下限 22.19 由脚本强制(历史原因见脚本注释:当年为内置的 dsh 抬的,现已无强制需求但保留)
 npm run seed:node
 
 # 4. 内置 Python(win-x64,ppt-master 依赖预装,~340MB) —— 全自动
@@ -297,6 +321,7 @@ npm start
 - `PI_WEB_REGISTRY` —— 自更新使用的 npm registry（默认 `https://registry.npmmirror.com`）。
 - `PI_WEB_AUTO_UPDATE_CHECK=0` —— 关闭启动后的自动检查更新。
 - `PI_CODING_AGENT_DIR` —— 指定 pi 会话数据目录（默认 `~/.pi/agent`）。
+- `PI_DESKTOP_DSH_APP` —— 指定 DeepSeek Harness 官方桌面端的位置（`DeepSeek Harness.exe` 或它所在目录）。优先于其它查找位置。
 - `PI_DESKTOP_DSH_HOME` —— 指定 DeepSeek Harness 的 `$DSH_HOME`（默认 `DSH_HOME`，再默认 `~/.dsh`）。
 - `PI_DESKTOP_LAUNCH=pi|dsh|ask` —— 跳过（或强制显示）启动选择器。
 
@@ -306,7 +331,7 @@ npm start
 
 ## 打包安装程序
 
-确保 `build/icon.ico` 存在，且 `vendor/node`（`npm run seed:node`）、`vendor/python`（`npm run seed:python`）、`runtime-seed`、`runtime-seed-dsh`（`npm run seed:dsh`）、`extensions-seed`（其 `node_modules` 跑 `npm run seed:extensions` 准备）已就绪，然后：
+确保图标产物已生成（`node build/_make_icons.js`），且 `vendor/node`（`npm run seed:node`）、`vendor/python`（`npm run seed:python`）、`runtime-seed`、`extensions-seed`（其 `node_modules` 跑 `npm run seed:extensions` 准备）已就绪，然后：
 
 ```bash
 npm run dist        # 生成 dist/Pi Agent Setup x.x.x.exe (NSIS)

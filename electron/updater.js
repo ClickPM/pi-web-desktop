@@ -7,10 +7,12 @@
  * writable per-user runtime dir, installed from the published npm package which
  * ships a prebuilt `.next` — so updating is a plain `npm install`, no compile.
  *
- * Every entry point takes the package name as an argument (defaulting to
- * pi-web's, which is what every pre-existing caller means) because the shell
- * now ships a SECOND runtime — @deepseek-ai/dsh under runtime-seed-dsh — that
- * updates through the exact same npm + staging + swap path.
+ * Every entry point takes the package name as an argument, defaulting to
+ * pi-web's. That parameterisation was added when the shell also bundled
+ * @deepseek-ai/dsh as a second runtime; that runtime is gone (DeepSeek Harness
+ * is now upstream's own application, see features/dsh.js), so pi-web is once
+ * again the only caller — but the argument stays, since it costs nothing and
+ * is the seam a second bundled runtime would use again.
  *
  * All npm calls go through the BUNDLED node + npm so the target machine needs
  * nothing pre-installed.
@@ -101,9 +103,59 @@ function runNpm(ctx, args, opts = {}) {
   });
 }
 
-async function getLatestVersion(ctx, pkg = PKG) {
-  const { stdout } = await runNpm(ctx, ["view", pkg, "version"], { timeout: 60000 });
-  return stdout.trim();
+/**
+ * Resolve the newest version `pkg` offers across `tags`.
+ *
+ * WHY THIS TAKES A TAG LIST — AND WHY NOBODY PASSES ONE TODAY. `npm view <pkg>
+ * version` reads the `latest` dist-tag and nothing else. That is right for
+ * pi-web, which publishes nothing else; it was wrong for @deepseek-ai/dsh,
+ * whose developer previews land on `next` first and reach `latest` only later
+ * (0.1.5-rc.1 sat on `next` alone for a week, until 2026-09-10), so an update
+ * check reading `latest` could not see a build the shell had already bundled.
+ *
+ * The dsh runtime is gone — DeepSeek Harness is upstream's own application now
+ * — so the only live caller is pi-web on the default `["latest"]`, i.e. exactly
+ * the old behaviour. The list form is kept because it is the general rule and
+ * because taking the MAXIMUM across tags is what makes a preview channel safe
+ * in both directions: whenever a build is promoted to `latest`, that one wins
+ * on its own, with no code change (which is what happened, hours after this
+ * was written). Unknown or unpublished tags are simply absent from the answer.
+ *
+ * One `npm view … dist-tags --json` call covers every tag, so asking for more
+ * costs no extra round trip.
+ *
+ * @returns the winning version string, or "" when no requested tag exists.
+ */
+async function getLatestVersion(ctx, pkg = PKG, tags = ["latest"]) {
+  const { stdout } = await runNpm(ctx, ["view", pkg, "dist-tags", "--json"], { timeout: 60000 });
+  let distTags;
+  try {
+    distTags = JSON.parse(stdout);
+  } catch {
+    throw new Error(`npm view ${pkg} dist-tags returned unparseable output: ${stdout.trim().slice(0, 200)}`);
+  }
+  return pickNewestTag(distTags, tags);
+}
+
+/**
+ * Pick the newest version among `tags` in an npm `dist-tags` map.
+ *
+ * Split out from getLatestVersion so the selection rule is testable without a
+ * network round trip. A tag the registry does not publish is skipped, not
+ * treated as an error: asking for `next` on a package that has none must not
+ * break the check.
+ *
+ * @param distTags - parsed `npm view <pkg> dist-tags --json` output.
+ * @param tags - tag names to consider.
+ * @returns the winning version string, or "" when none of the tags exist.
+ */
+function pickNewestTag(distTags, tags) {
+  let best = "";
+  for (const tag of tags) {
+    const version = distTags && typeof distTags[tag] === "string" ? distTags[tag].trim() : "";
+    if (version && isNewer(version, best || null)) best = version;
+  }
+  return best;
 }
 
 async function installLatest(ctx, onProgress, pkg = PKG) {
@@ -222,6 +274,7 @@ module.exports = {
   getInstalledVersion,
   getInstalledAgentVersion,
   getLatestVersion,
+  pickNewestTag,
   installLatest,
   installInto,
   isNewer,

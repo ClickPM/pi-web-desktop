@@ -7,12 +7,15 @@
   Downloads node-v<Version>-win-x64.zip (default mirror: npmmirror; falls back to
   nodejs.org), extracts it, and moves the result into vendor/node.
 
-  VERSION FLOOR — do not lower it: @deepseek-ai/dsh declares
-  `engines: ^22.19.0 || >=24.0.0` and MEANS it. On the previous bundled 22.12.0
-  `dsh web` died at boot importing `createZstdDecompress` from node:zlib (22.15+)
-  and `stripTypeScriptTypes` from node:module (22.13+). Staying on the 22 LTS
-  line (rather than jumping to 24) keeps the change small for pi-web/Next.js,
-  which shares this runtime.
+  VERSION FLOOR — historical, and kept. It was raised for @deepseek-ai/dsh,
+  which declares `engines: ^22.19.0 || >=24.0.0` and MEANS it: on the previous
+  bundled 22.12.0 `dsh web` died at boot importing `createZstdDecompress` from
+  node:zlib (22.15+) and `stripTypeScriptTypes` from node:module (22.13+).
+  That runtime is no longer bundled — DeepSeek Harness is now upstream's own
+  application, which carries its own Node — so nothing here still REQUIRES the
+  floor. It stays anyway: pi-web/Next.js is happy on the 22 LTS line, the
+  provisioned runtime already satisfies it, and lowering it would buy nothing
+  while re-opening a class of boot failures that took real time to diagnose.
 
   Idempotent: an existing vendor/node that already satisfies the floor is left
   alone unless -Force. The previous tree is renamed aside (vendor/node.bak-<ver>)
@@ -32,7 +35,7 @@ param(
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# The floor dsh needs; checked against whatever is already on disk.
+# The inherited floor (see .DESCRIPTION); checked against whatever is on disk.
 $MinMajor = 22
 $MinMinor = 19
 
@@ -94,7 +97,7 @@ if (Test-Path $nodeExe) {
 Move-Item $extracted $nodeDir
 Remove-Item -Force $tmpZip -ErrorAction SilentlyContinue
 
-if (-not (Test-NodeFloor $nodeExe)) { throw "provisioned runtime $(& $nodeExe -v) is below the v$MinMajor.$MinMinor floor dsh needs" }
+if (-not (Test-NodeFloor $nodeExe)) { throw "provisioned runtime $(& $nodeExe -v) is below the v$MinMajor.$MinMinor floor" }
 $npmCli = Join-Path $nodeDir "node_modules\npm\bin\npm-cli.js"
 if (-not (Test-Path $npmCli)) { throw "bundled npm missing at $npmCli" }
 

@@ -354,24 +354,37 @@ function writeGoodTree(dir, version, { truncateNative = false, scratch = false, 
     ok("build metadata is ignored", !U.isNewer("0.1.0+build2", "0.1.0+build1"));
   }
 
-  console.log("\n[10] verifyRuntime — dsh's own landmark list");
+  console.log("\n[9b] pickNewestTag — a preview channel must not hide behind `latest`");
   {
-    const DSH_SEED = path.join(REPO, "runtime-seed-dsh");
-    const dctx = { ...ctx, requiredFiles: G.DSH_REQUIRED_FILES };
+    // The shape observed on the morning of 2026-09-10, which is why this
+    // exists: @deepseek-ai/dsh 0.1.5-rc.1 was published under `next` only, so a
+    // check reading `latest` alone saw nothing newer than the week-old
+    // 0.1.2-rc.1. Upstream promoted `latest` hours later — the point of the
+    // rule is that neither state needs a code change, so both are pinned here.
+    // No shipped runtime passes a tag list today (dsh moved to upstream's own
+    // application); these lock the RULE, not a current caller.
+    const real = { latest: "0.1.2-rc.1", next: "0.1.5-rc.1", alpha: "0.1.5-alpha.2" };
+    ok("next wins when it is ahead", U.pickNewestTag(real, ["latest", "next"]) === "0.1.5-rc.1");
+    ok("latest alone still sees only latest", U.pickNewestTag(real, ["latest"]) === "0.1.2-rc.1");
+    ok("an untracked tag is ignored", U.pickNewestTag(real, ["latest", "next"]) !== "0.1.5-alpha.2");
 
-    // A pi-web tree must NOT satisfy the dsh checks (and vice versa) — that is
-    // the whole point of making the list per-runtime.
-    const piTree = path.join(TMP, "rt-pi-for-dsh");
-    writeGoodTree(piTree, "0.8.1");
-    const cross = await G.verifyRuntime(dctx, piTree);
-    ok("pi-web tree fails the dsh landmark checks", cross.ok === false, JSON.stringify(cross.failures.map((f) => f.label)));
+    // The other direction must need no code change: once upstream promotes a
+    // build to `latest` and lets `next` fall behind, `latest` has to win.
+    const promoted = { latest: "0.1.5-rc.1", next: "0.1.5-rc.1" };
+    ok("latest wins after promotion", U.pickNewestTag(promoted, ["latest", "next"]) === "0.1.5-rc.1");
+    const stale = { latest: "0.2.0", next: "0.1.5-rc.1" };
+    ok("a stale next never drags the answer back", U.pickNewestTag(stale, ["latest", "next"]) === "0.2.0");
 
-    if (fs.existsSync(path.join(DSH_SEED, "node_modules"))) {
-      const real = await G.verifyRuntime(dctx, DSH_SEED);
-      ok("the checkout's runtime-seed-dsh verifies", real.ok === true, JSON.stringify(real.failures));
-    } else {
-      skipped("real runtime-seed-dsh verifies", "runtime-seed-dsh not provisioned (npm run seed:dsh)");
-    }
+    // Absent / malformed maps must degrade to "nothing to offer", never throw:
+    // isNewer("", installed) would otherwise be asked to compare a non-version.
+    ok("missing next is skipped", U.pickNewestTag({ latest: "0.1.2-rc.1" }, ["latest", "next"]) === "0.1.2-rc.1");
+    ok("no requested tag exists", U.pickNewestTag({ beta: "9.9.9" }, ["latest", "next"]) === "");
+    ok("empty dist-tags", U.pickNewestTag({}, ["latest", "next"]) === "");
+    ok("null dist-tags", U.pickNewestTag(null, ["latest", "next"]) === "");
+    ok("non-string tag value is skipped", U.pickNewestTag({ latest: 12 }, ["latest"]) === "");
+
+    // "" must read as "no update", not as an update to nothing.
+    ok("empty result is not newer than an install", !U.isNewer(U.pickNewestTag({}, ["next"]), "0.1.5-rc.1"));
   }
 
   fs.rmSync(TMP, { recursive: true, force: true });
