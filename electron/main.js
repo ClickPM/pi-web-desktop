@@ -33,11 +33,7 @@ const net = require("net");
 const http = require("http");
 const updater = require("./updater");
 const runtimeGuard = require("./runtime-guard");
-const dashboard = require("./features/dashboard");
-const subagents = require("./features/subagents");
-const toolsFeature = require("./features/tools");
 const directoryPicker = require("./features/directory-picker");
-const extensionsManager = require("./features/extensions-manager");
 const nativeThemeSync = require("./features/native-theme");
 
 const isWindows = process.platform === "win32";
@@ -47,10 +43,6 @@ const AUTO_CHECK = process.env.PI_WEB_AUTO_UPDATE_CHECK !== "0";
 // root handed to it via this env var (its shared/utils.ts + runs/shared/pi-spawn.ts).
 const PI_CODING_AGENT_PACKAGE = "@earendil-works/pi-coding-agent";
 const PI_CODING_AGENT_PACKAGE_ROOT_ENV = "PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT";
-// When this app launch began (epoch ms). Captured at main-process load so it
-// survives embedded-server restarts; the dashboard counts token usage from
-// session turns at/after this moment ("since this pi-agent was opened").
-const APP_BOOT_MS = Date.now();
 
 const os = require("os");
 const DEBUG_LOG = path.join(os.tmpdir(), "pi-web-desktop-debug.log");
@@ -417,159 +409,6 @@ async function ensureRuntimeHealthy() {
 }
 
 // ---------------------------------------------------------------------------
-// Bundled extensions (selective install, user edits win)
-// ---------------------------------------------------------------------------
-// The app ships a catalogue of pi extensions in `extensions-seed/`
-// (extensions-seed/manifest.json is the single source of truth for the managed
-// set). The user picks which ones to install on first run — and can revisit the
-// choice any time via App → 扩展管理…
-//
-// IMPORTANT — this used to overwrite every managed file on every launch ("the
-// repo always wins"), which silently ate edits made in ~/.pi. It no longer
-// does: features/extensions-manager.js remembers the hash of what it wrote and
-// only ever refreshes a file that is still byte-identical to it. See that
-// module's header for the full policy; everything below is just wiring.
-//
-// Any failure here is logged and swallowed so it can never block boot.
-function extensionsSeedDir() {
-  return path.join(resourcesBase(), "extensions-seed");
-}
-
-function piAgentDir() {
-  // Same resolution the running agent (and features/dashboard.js) uses.
-  return process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
-}
-
-function extensionsCtx() {
-  return {
-    seedDir: extensionsSeedDir(),
-    destDir: path.join(piAgentDir(), "extensions"),
-    stateFile: path.join(app.getPath("userData"), "extensions-state.json"),
-    copyDir: copyRuntime,
-    dbg,
-  };
-}
-
-/**
- * Launch-time sync. Returns true when the user has never chosen (first run or a
- * wiped state file), in which case the caller shows the picker instead.
- */
-async function ensureBundledExtensions() {
-  const result = await extensionsManager.syncOnLaunch(extensionsCtx());
-  return Boolean(result && result.needsPicker);
-}
-
-// ---------------------------------------------------------------------------
-// Bundled skills sync (repo skills-seed/ is the source of truth)
-// ---------------------------------------------------------------------------
-// The OKF knowledge skills ship with the app so a fresh install has them active
-// out of the box in ~/.pi/agent/skills/ (pi auto-discovers skills there, so they
-// work in EVERY workspace). The repo's `skills-seed/` is their CANONICAL SOURCE —
-// developed there, never hand-edited in the data dir. On every launch we sync each
-// managed skill DIRECTORY into ~/.pi/agent/skills/<name>/: any file whose content
-// differs from the bundle is (over)written, which is what makes the "edit in the
-// repo -> reinstall (or re-run) loop" deploy changes. These skills are pure
-// stdlib Python (no node_modules, no pip deps).
-//
-// Only these managed skill names are touched (any other skill in the dir is left
-// alone). Files under __pycache__/ and *.pyc are never deployed. Any failure here
-// is logged and swallowed so it can never block boot.
-const DEFAULT_SKILLS = [
-  "wiki-init",
-  "wiki-compile",
-  "wiki-query",
-  "wiki-lint",
-  "okf-visualizer",
-  "ppt-master",
-];
-
-function skillsSeedDir() {
-  return path.join(resourcesBase(), "skills-seed");
-}
-
-// Cheap content signature of a bundled skill tree: hash of (relpath|size|mtime)
-// over all files — STAT ONLY, no file-body reads. Used to skip the deep per-file
-// sync when the bundle is unchanged (critical for ppt-master's ~12k icon files,
-// where deep-diffing every launch would be far too slow). Bundle mtimes change
-// on reinstall/app-update and on a dev edit, so a real change always re-syncs.
-function skillBundleSignature(dir) {
-  const crypto = require("crypto");
-  const parts = [];
-  const walk = (d, rel) => {
-    let entries;
-    try {
-      entries = fs.readdirSync(d, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
-      if (e.name === "__pycache__") continue;
-      const full = path.join(d, e.name);
-      const r = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isDirectory()) {
-        walk(full, r);
-      } else if (e.isFile()) {
-        if (e.name.endsWith(".pyc")) continue;
-        try {
-          const st = fs.statSync(full);
-          parts.push(`${r}|${st.size}|${Math.floor(st.mtimeMs)}`);
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-  };
-  walk(dir, "");
-  return crypto.createHash("md5").update(parts.join("\n")).digest("hex");
-}
-
-async function ensureBundledSkills() {
-  const seed = skillsSeedDir();
-  if (!fs.existsSync(seed)) {
-    dbg(`skills seed missing at ${seed} — skipping skill sync`);
-    return;
-  }
-  const dest = path.join(piAgentDir(), "skills");
-  await fs.promises.mkdir(dest, { recursive: true });
-
-  let synced = 0;
-  let skipped = 0;
-  for (const name of DEFAULT_SKILLS) {
-    const s = path.join(seed, name);
-    if (!fs.existsSync(s)) continue;
-    const skillDest = path.join(dest, name);
-    // Fast path: skip the deep per-file diff when the bundle signature matches
-    // the one recorded at last deploy (.seed-version).
-    const sig = skillBundleSignature(s);
-    const stampFile = path.join(skillDest, ".seed-version");
-    let deployedSig = null;
-    try {
-      deployedSig = fs.readFileSync(stampFile, "utf8").trim();
-    } catch {
-      /* not deployed yet */
-    }
-    if (deployedSig === sig) {
-      skipped++;
-      continue;
-    }
-    // Copy via robocopy/cp (a SPAWNED process) rather than a synchronous
-    // fs.copyFileSync loop: a large skill like ppt-master (~12k files) would
-    // otherwise block the main thread for tens of seconds and freeze the window
-    // ("not responding") on first deploy. `await` here yields to the event loop
-    // while the child process runs, so the window stays responsive.
-    try {
-      await copyRuntime(s, skillDest);
-      synced++;
-      fs.writeFileSync(stampFile, sig);
-      dbg(`synced skill ${name} (full copy)`);
-    } catch (e) {
-      dbg(`failed to sync skill ${name}: ${(e && e.message) || e}`);
-    }
-  }
-  dbg(`ensureBundledSkills done; synced ${synced} skill(s), ${skipped} up-to-date, to ${dest}`);
-}
-
-// ---------------------------------------------------------------------------
 // Server process management
 // ---------------------------------------------------------------------------
 let serverProc = null;
@@ -867,111 +706,6 @@ ipcMain.on("pi-web-desktop:apply-update", () => {
   applyUpdate(ctx, installed, lastKnownLatest, true).catch(() => {});
 });
 
-// Dashboard action: user clicked "打开知识图谱" in the wiki popover. Generate the
-// OKF graph for the ACTIVE workspace with the bundled Python (the okf-visualizer
-// skill's build_visualizer.py), then open the self-contained HTML in a standalone
-// in-app window (reused across opens). Non-fatal; logs and returns on any miss.
-let okfGraphWin = null;
-ipcMain.on("pi-web-desktop:open-okf-graph", async () => {
-  try {
-    const cwd = dashboard.activeCwd();
-    if (!cwd) {
-      dbg("open-okf-graph: no active workspace cwd");
-      return;
-    }
-    let bundleDir = "wiki";
-    try {
-      const cfg = JSON.parse(fs.readFileSync(path.join(cwd, "okf.config.json"), "utf8"));
-      if (cfg && typeof cfg.bundle_dir === "string" && cfg.bundle_dir.trim()) bundleDir = cfg.bundle_dir;
-    } catch {
-      /* no config — default bundle dir */
-    }
-    const py = bundledPythonExe();
-    const script = path.join(piAgentDir(), "skills", "okf-visualizer", "scripts", "build_visualizer.py");
-    if (!fs.existsSync(py) || !fs.existsSync(script)) {
-      dbg(`open-okf-graph: missing py=${fs.existsSync(py)} script=${fs.existsSync(script)}`);
-      return;
-    }
-    await new Promise((resolve) => {
-      const p = spawn(py, [script, "--vault", cwd], {
-        windowsHide: true,
-        env: { ...process.env, PYTHONIOENCODING: "utf-8" },
-      });
-      let err = "";
-      p.stderr.on("data", (d) => (err += d.toString()));
-      p.on("error", (e) => {
-        dbg(`open-okf-graph spawn error ${e.message}`);
-        resolve();
-      });
-      p.on("exit", (code) => {
-        if (code !== 0) dbg(`build_visualizer exit ${code}: ${err.slice(-300)}`);
-        resolve();
-      });
-    });
-    const htmlPath = path.join(cwd, bundleDir, "okf-graph.html");
-    if (!fs.existsSync(htmlPath)) {
-      dbg(`open-okf-graph: graph not generated at ${htmlPath}`);
-      return;
-    }
-    if (okfGraphWin && !okfGraphWin.isDestroyed()) {
-      // Cache-bust: loadFile would serve Chromium's cached copy of the same path
-    // after the file is regenerated, so the graph never updates. A unique query
-    // forces a fresh read from disk each open.
-    okfGraphWin.loadURL(require("url").pathToFileURL(htmlPath).href + "?t=" + Date.now());
-      okfGraphWin.focus();
-      return;
-    }
-    okfGraphWin = new BrowserWindow({
-      width: 1100,
-      height: 760,
-      title: "OKF 知识图谱",
-      backgroundColor: "#0A0A0A",
-      autoHideMenuBar: true,
-      webPreferences: { contextIsolation: true, nodeIntegration: false },
-    });
-    okfGraphWin.on("closed", () => {
-      okfGraphWin = null;
-    });
-    // Cache-bust: loadFile would serve Chromium's cached copy of the same path
-    // after the file is regenerated, so the graph never updates. A unique query
-    // forces a fresh read from disk each open.
-    okfGraphWin.loadURL(require("url").pathToFileURL(htmlPath).href + "?t=" + Date.now());
-    if (process.env.PI_OKF_DEVTOOLS) okfGraphWin.webContents.openDevTools({ mode: "bottom" });
-    dbg(`open-okf-graph: opened ${htmlPath}`);
-  } catch (e) {
-    dbg(`open-okf-graph error ${(e && e.stack) || e}`);
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Dashboard (MCP / extensions activation status)
-// ---------------------------------------------------------------------------
-// Backend for the bottom dashboard bar injected by preload.js. Reads ~/.pi
-// config directly (see features/dashboard.js) and reports active/inactive
-// MCP servers and extensions. Never throws — returns a partial result + error.
-ipcMain.handle("pi-web-desktop:dashboard-status", async () => {
-  try {
-    // serverUrl: built-in subagents are in-process sessions of the embedded
-    // server, so their running state comes from its /api/agent/running.
-    // serverPid scopes legacy (pi-subagents) process counting to THIS app's
-    // child processes.
-    return await dashboard.readStatus({
-      sinceMs: APP_BOOT_MS,
-      serverUrl,
-      serverPid: serverProc && !serverProc.killed ? serverProc.pid : undefined,
-    });
-  } catch (e) {
-    dbg(`dashboard-status error ${(e && e.message) || e}`);
-    return {
-      mcp: { active: [], inactive: [] },
-      extensions: { active: [], inactive: [] },
-      tokens: { total: 0, input: 0, output: 0, calls: 0, sessions: 0 },
-      subagents: { running: 0, runningList: [], doneSession: 0, abortedSession: 0, failedSession: 0, recent: [] },
-      error: String((e && e.message) || e),
-    };
-  }
-});
-
 // Backend for the dashboard bar's reload button. Same effect as the file
 // menu's 重新加载 (Ctrl+R), reachable without unhiding the menu bar. The
 // reload is driven from the main process (rather than location.reload() in
@@ -985,72 +719,6 @@ ipcMain.handle("pi-web-desktop:reload-page", (e) => {
   } catch (err) {
     dbg(`reload-page error ${(err && err.message) || err}`);
     return { ok: false, error: String((err && err.message) || err) };
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Tools (the live session's tool registry)
-// ---------------------------------------------------------------------------
-// Backend for the Tools chip. Unlike the MCP/extension counts this cannot be
-// read off disk — the registry only exists inside a running agent process — so
-// features/tools.js asks the embedded pi-web over its session RPC, and only when
-// a session's RPC process is already alive (never spawning one just to count).
-// See the header of features/tools.js for why the answer is session-scoped.
-ipcMain.handle("pi-web-desktop:tools-status", async (_event, payload) => {
-  try {
-    return await toolsFeature.readTools({
-      serverUrl,
-      force: !!(payload && payload.force),
-    });
-  } catch (e) {
-    dbg(`tools-status error ${(e && e.message) || e}`);
-    return {
-      available: false,
-      reason: "error",
-      total: 0,
-      active: 0,
-      groups: [],
-      error: String((e && e.message) || e),
-    };
-  }
-});
-
-// Stop button on the Sub-agents popover. Payload is one of
-//   { sessionId }  built-in (pi-web >= 0.9.0) run → pi-web's own graceful abort
-//   { pid }        legacy pi-subagents child process → forced subtree kill
-//   { all: true }  everything running, both kinds
-// Both identifiers are re-validated inside stopSubagents against fresh state (a
-// session id must still be a subagent session file AND live in the server's
-// registry; a pid must still be a pi-cli process under OUR server), so a stale
-// or forged value from the renderer can't abort the user's main chat or kill an
-// arbitrary process. See the header of features/subagents.js.
-ipcMain.handle("pi-web-desktop:subagent-stop", async (_event, payload) => {
-  const req = payload && typeof payload === "object" ? payload : {};
-  const opts = {
-    all: req.all === true,
-    pids: Number.isInteger(Number(req.pid)) && Number(req.pid) > 1 ? [Number(req.pid)] : [],
-    sessionIds: typeof req.sessionId === "string" && req.sessionId ? [req.sessionId] : [],
-    serverUrl,
-    serverPid: serverProc && !serverProc.killed ? serverProc.pid : undefined,
-    sinceMs: APP_BOOT_MS,
-    cwd: null,
-  };
-  const label = opts.all ? "all" : opts.sessionIds.length ? `session ${opts.sessionIds[0]}` : `pid ${req.pid}`;
-  try {
-    opts.cwd = dashboard.activeCwd();
-  } catch {
-    /* legacy-package lookup falls back to global settings */
-  }
-  try {
-    const res = await subagents.stopSubagents(opts);
-    dbg(
-      `subagent-stop ${label} → ok=${res.ok} ` +
-        `stopped=[${res.stopped.join(",")}] skipped=${res.skipped.length}${res.error ? ` error=${res.error}` : ""}`
-    );
-    return res;
-  } catch (e) {
-    dbg(`subagent-stop error ${(e && e.stack) || e}`);
-    return { ok: false, stopped: [], skipped: [], error: String((e && e.message) || e) };
   }
 });
 
@@ -1079,119 +747,6 @@ ipcMain.on("pi-web-desktop:theme-changed", (event, theme) => {
   const applied = nativeThemeSync.set(theme, { userDataDir: app.getPath("userData"), win });
   dbg(`theme-changed: page reported ${JSON.stringify(theme)} -> ${applied || "ignored"}`);
 });
-
-// ---------------------------------------------------------------------------
-// Extension picker window (first run + App → 扩展管理…)
-// ---------------------------------------------------------------------------
-// A local file:// window rendering extensions-picker.html through its own
-// preload (extensions-preload.js). On first run boot AWAITS it, so the pi server
-// only starts once the chosen extensions are in place; from the menu it is just
-// a modal over the main window.
-let extPickerWin = null;
-let extPickerResolve = null;
-let extPickerApplied = false;
-
-function openExtensionsPicker(parent) {
-  if (extPickerWin && !extPickerWin.isDestroyed()) {
-    extPickerWin.focus();
-    return Promise.resolve(false);
-  }
-  extPickerApplied = false;
-  extPickerWin = new BrowserWindow({
-    width: 880,
-    height: 720,
-    minWidth: 640,
-    minHeight: 480,
-    parent: parent || undefined,
-    modal: Boolean(parent),
-    backgroundColor: "#0A0A0A",
-    autoHideMenuBar: true,
-    title: "扩展管理",
-    // A pi-side child window; it follows the pi window's identity.
-    icon: path.join(__dirname, "..", "build", "icon-pi.png"),
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      preload: path.join(__dirname, "extensions-preload.js"),
-    },
-  });
-  extPickerWin.loadFile(path.join(__dirname, "extensions-picker.html"));
-
-  // Resolves with "did the user apply a selection?" — closing the window (or
-  // 稍后再说) leaves ~/.pi untouched and, on first run, re-asks next launch.
-  return new Promise((resolve) => {
-    extPickerResolve = resolve;
-    extPickerWin.on("closed", () => {
-      extPickerWin = null;
-      const r = extPickerResolve;
-      extPickerResolve = null;
-      if (r) r(extPickerApplied);
-    });
-  });
-}
-
-ipcMain.handle("pi-web-desktop:ext-status", () => {
-  try {
-    return extensionsManager.computeStatus(extensionsCtx());
-  } catch (e) {
-    dbg(`ext-status error ${(e && e.message) || e}`);
-    return { ok: false, firstRun: true, extensions: [], error: String((e && e.message) || e) };
-  }
-});
-
-ipcMain.handle("pi-web-desktop:ext-apply", async (_event, ids) => {
-  try {
-    const result = await extensionsManager.applySelection(extensionsCtx(), Array.isArray(ids) ? ids : []);
-    extPickerApplied = true;
-    if (extPickerWin && !extPickerWin.isDestroyed()) extPickerWin.close();
-    return { ok: true, ...result };
-  } catch (e) {
-    dbg(`ext-apply error ${(e && e.stack) || e}`);
-    return { ok: false, error: String((e && e.message) || e) };
-  }
-});
-
-ipcMain.handle("pi-web-desktop:ext-restore", (_event, id) => {
-  try {
-    return extensionsManager.restoreFromBundle(extensionsCtx(), String(id));
-  } catch (e) {
-    return { ok: false, error: String((e && e.message) || e) };
-  }
-});
-
-ipcMain.handle("pi-web-desktop:ext-open-folder", async () => {
-  const dir = path.join(piAgentDir(), "extensions");
-  try {
-    await fs.promises.mkdir(dir, { recursive: true });
-  } catch {
-    /* ignore */
-  }
-  shell.openPath(dir);
-});
-
-ipcMain.on("pi-web-desktop:ext-cancel", () => {
-  if (extPickerWin && !extPickerWin.isDestroyed()) extPickerWin.close();
-});
-
-// Menu entry: manage the selection after install. pi loads extensions when a
-// session starts, so an applied change needs the embedded server to restart (or
-// a /reload inside pi) before it takes effect — offer that right away.
-async function manageExtensions() {
-  const applied = await openExtensionsPicker(win);
-  if (!applied || !serverProc) return;
-  const { response } = await dialog.showMessageBox(win, {
-    type: "question",
-    buttons: ["立即重启服务", "稍后"],
-    defaultId: 0,
-    cancelId: 1,
-    title: "扩展已更新",
-    message: "扩展改动需要重启内嵌服务才会生效。",
-    detail: "重启会中断正在运行的会话；也可以稍后在 pi 里执行 /reload。",
-  });
-  if (response === 0) {
-    startOrRestartServer().catch((e) => dialog.showErrorBox("重启失败", String(e)));
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Window + lifecycle
@@ -1276,7 +831,6 @@ async function showError(err) {
 function migrateLegacyUserData() {
   const LEGACY_USER_DATA_DIRS = ["Pi Agent", "Pi Dsh", "Pi&Dsh"];
   const STATE_FILES = [
-    "extensions-state.json",
     "theme-state.json",
   ];
   try {
@@ -1345,28 +899,6 @@ async function boot() {
     // load? Repairs itself if not, so a torn install no longer surfaces as an
     // opaque "server not ready in time" sixty seconds later.
     await ensureRuntimeHealthy();
-    // Extensions. First run has no recorded selection, so we ask which ones to
-    // install and AWAIT the picker — the server must start with the chosen set
-    // in place. Afterwards this is a non-destructive sync that never overwrites
-    // a file the user edited. Non-fatal: never block boot.
-    try {
-      const needsPicker = await ensureBundledExtensions();
-      if (needsPicker) {
-        dbg("no extension selection recorded — showing the first-run picker");
-        const applied = await openExtensionsPicker(win);
-        // Dismissed without choosing: install nothing now, ask again next launch.
-        if (!applied) dbg("first-run extension picker dismissed — nothing deployed");
-      }
-    } catch (e) {
-      dbg(`ensureBundledExtensions error (non-fatal): ${(e && e.stack) || e}`);
-    }
-    // Sync the bundled OKF knowledge skills (repo skills-seed/ is the source of
-    // truth) into ~/.pi/agent/skills/. Non-fatal: never block boot.
-    try {
-      await ensureBundledSkills();
-    } catch (e) {
-      dbg(`ensureBundledSkills error (non-fatal): ${(e && e.stack) || e}`);
-    }
     await startOrRestartServer();
     dbg("startOrRestartServer returned ok");
     if (AUTO_CHECK) {
@@ -1431,10 +963,6 @@ function buildMenu() {
         {
           label: "检查更新…",
           click: () => checkForUpdates(true),
-        },
-        {
-          label: "扩展管理…",
-          click: () => manageExtensions(),
         },
         { type: "separator" },
         {

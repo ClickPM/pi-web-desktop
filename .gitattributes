@@ -1,8 +1,2 @@
-# The bundled extension sources are deployed BYTE-FOR-BYTE into
-# ~/.pi/agent/extensions/ and compared against the deployed copy to decide
-# whether the user has edited them. With core.autocrlf=true these files would be
-# checked out as CRLF while the deployed copies stay LF, so every launch would
-# see a "difference" that is pure line-ending noise. Pin them to LF.
-extensions-seed/*.ts text eol=lf
-extensions-seed/manifest.json text eol=lf
-extensions-seed/package.json text eol=lf
+# Git attributes for repo
+* text=auto eol=lf

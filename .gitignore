@@ -6,16 +6,8 @@ package-lock.json
 # Build inputs that are regenerated (see README):
 #  - vendor/node  : bundled Node.js runtime (downloaded)
 #  - runtime-seed : npm prod install of @agegr/pi-web
-#  - extensions-seed/node_modules : deps for the bundled default extensions
-#    (regenerated via `npm run seed:extensions`; the .ts sources ARE committed)
 vendor/
 runtime-seed/
-
-# ...but the okf-visualizer's vendored renderer is NOT a regenerated download:
-# it is a committed source input (force-graph.min.js, MIT), inlined into every
-# generated graph. Without it build_visualizer.py cannot produce output at all.
-!skills-seed/okf-visualizer/vendor/
-!skills-seed/okf-visualizer/vendor/**
 
 # runtime-guard sidecars. Staging tree, rollback trash and swap journal are
 # created NEXT TO the runtime dir so renames stay on one volume — in dev mode

@@ -1,9 +1,0 @@
-{
-  "name": "pi-agent-extensions",
-  "version": "0.0.0",
-  "private": true,
-  "description": "Shared npm dependencies for single-file pi extensions in ~/.pi/agent/extensions/",
-  "dependencies": {
-    "@modelcontextprotocol/client": "^2.0.0"
-  }
-}

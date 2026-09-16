@@ -3,16 +3,14 @@
 把 [pi-web](https://github.com/agegr/pi-web)（pi 编程智能体的网页界面，npm 包 **`@agegr/pi-web`**）打包成一个**开箱即用的桌面应用**：
 双击即用，没有浏览器、没有地址栏、没有常驻终端窗口，**目标机器无需预装任何运行时**。
 
-它不只是「pi-web 套壳」——而是一台**电池全含的 AI 工作站**：内置 Node 与 Python 两套运行时、13 个默认扩展、一套 OKF 知识库技能（编译 / 查询 / 检查 / 可视化）和 PPT 生成技能 `ppt-master`，拷到空电脑双击即可使用。
+它不只是「pi-web 套壳」——而是一台**电池全含的 AI 工作站**：内置 Node 与 Python 两套运行时，拷到空电脑双击即可使用。
 
 **核心特性**
 - 🧳 **内置 Node + Python 运行时** —— 目标机器无需 Node/npm/Python，拷到空电脑双击即用。
 - ⚡ **就地运行，首启秒开** —— 直接从（可写的）安装目录跑 pi-web，不做首启复制。
 - 🔄 **运行时自更新** —— App 内「检查更新」直接装 `@agegr/pi-web@latest`（npm 包自带预构建 `.next`，免编译），独立更新 pi-web + pi-coding-agent，**无需重新发版、不碰外壳代码**。安装走 **staging + 校验通过才原子换入**，更新失败/断网/中途被杀都不会损坏正在用的运行时。
 - 🩺 **启动自检与自愈** —— 每次启动先验证运行时的原生模块是否真的能加载；发现是安装被中断留下的残缺文件，自动按锁定版本重装修复（不趁机升级），而不是让用户对着 `server not ready in time` 干瞪眼。
-- 🧩 **默认扩展随装** —— 13 个 pi 扩展每次启动从仓库同步进 `~/.pi/agent/extensions/`，仓库为唯一真源。
-- 📚 **默认技能随装** —— OKF 知识库技能 + `ppt-master` 演示文稿生成，每次启动同步进 `~/.pi/agent/skills/`，所有工作目录可用。
-- 🐍 **零依赖 Python 技能** —— 内置 Python 让 Python 技能「装完即用、离线零 pip」；环境守卫强制用户项目走干净的 `.venv`。
+- 🐍 **零依赖 Python 环境** —— 内置 Python 支持离线工具与脚本；环境守卫强制用户项目走干净的 `.venv`。
 - 🪟 **原生窗口** —— 内嵌 Next.js 服务隐藏运行在随机 `127.0.0.1` 端口，关窗即停。
 
 ## 目录结构
@@ -20,18 +18,16 @@
 ```
 pi-web-desktop/
 ├── electron/
-│   ├── main.js         # 主进程:解析运行时、起内置 node 服务、开窗、检查更新、同步扩展/技能、注入 Python 环境、退出清理
+│   ├── main.js         # 主进程:解析运行时、起内置 node 服务、开窗、检查更新、注入 Python 环境、退出清理
 │   ├── updater.js      # npm 层:用内置 npm 查询版本 / 装到指定目录(installInto)
 │   ├── runtime-guard.js # 运行时完整性:启动校验、staging 安装、原子换入、崩溃恢复
 │   ├── preload.js      # 最小安全桥(contextIsolation 开启)—— 自定义能力的暴露入口
-│   ├── features/       # dashboard / subagents / extensions-manager / native-theme 等外壳后端逻辑
+│   ├── features/       # directory-picker / native-theme 等外壳后端逻辑
 │   ├── loading.html / updating.html / healing.html / error.html
 │   └── ui/             # ★ 自定义能力的前端页面(可选,见「开发约束」)
 ├── vendor/node/        # 内置 Node.js 运行时(node.exe + npm) → resources/node            ← 构建输入(npm run seed:node)
-├── vendor/python/      # 内置 Python(python-build-standalone + ppt-master 依赖预装) → resources/python ← 构建输入(npm run seed:python)
-├── runtime-seed/       # @agegr/pi-web 的 npm 生产安装(含 .next) → resources/runtime-seed          ← 构建输入(npm run seed)
-├── extensions-seed/    # 默认随装的 13 个 pi 扩展(.ts 源码已入库;node_modules 为构建输入) → resources/extensions-seed
-├── skills-seed/        # 默认随装的技能(wiki 系列 OKF + ppt-master,源码已入库) → resources/skills-seed
+├── vendor/python/      # 内置 Python(python-build-standalone) → resources/python        ← 构建输入(npm run seed:python)
+├── runtime-seed/       # @agegr/pi-web 的 npm 生产安装(含 .next) → resources/runtime-seed ← 构建输入(npm run seed)
 ├── scripts/            # seed-node.ps1(供给 vendor/node)
 │                       # + seed-python.ps1 + vendor-python-requirements.txt(供给 vendor/python)
 │                       # + test-runtime-guard.js(运行时守卫 / 版本比较回归测试,npm run test:guard)
@@ -40,8 +36,7 @@ pi-web-desktop/
 └── package.json
 ```
 
-> **构建输入 vs 入库源码**:`vendor/`、`runtime-seed/`、`extensions-seed/node_modules` 都体积大、已 gitignore,需按[下文](#从零准备构建输入)重新准备。本地若存在 `pi-web/` 目录,那是已退役的 fork 工作副本(`cking000bigdemon/pi-web`,曾发布为 `@cking000/pi-web`),桌面端已回归上游包,不再是构建输入。
-> **已纳入版本库**:`extensions-seed/` 的 13 个 `.ts` 扩展源码 + `manifest.json`(扩展目录清单)、`skills-seed/` 全部技能源码(含 `ppt-master` 的模板/脚本)、`scripts/` 供给脚本——这些是产品源码,直接随仓库走。
+> **构建输入 vs 入库源码**:`vendor/`、`runtime-seed/` 都体积大、已 gitignore,需按[下文](#从零准备构建输入)重新准备。本地若存在 `pi-web/` 目录,那是已退役的 fork 工作副本(`cking000bigdemon/pi-web`,曾发布为 `@cking000/pi-web`),桌面端已回归上游包,不再是构建输入。
 
 ## 应用身份与图标
 
@@ -84,125 +79,6 @@ pi-web-desktop/
 
 数据目录沿用 pi 的 `~/.pi/agent`（会话、`models.json`、模型凭证），与终端 `pi`、全局 `pi-web` 共享。
 
-## 内置的扩展与技能
-
-仓库的 `extensions-seed/` 与 `skills-seed/` 是这些能力的**发布源**；每次启动同步进 `~/.pi/agent/`，仓库外的其它扩展/技能一律不动。
-
-两者的覆盖策略**不同**：
-
-- **技能**：仍是「仓库赢」——受管技能目录内容不同即覆盖（**别在 `~/.pi/agent/skills/` 手改受管技能**）。
-- **扩展**：**用户赢**。首次启动让用户勾选装哪些；此后只在文件**仍与我们写下去时一模一样**（未被用户改过）时才随应用升级刷新。你在 `~/.pi/agent/extensions/` 里改过的扩展**永远不会被自动覆盖**，只会在「扩展管理」里标成「有新版可用」，由你决定是否点「恢复内置版本」（会先把你的版本备份成 `<名>.ts.userbak.<时间戳>`）。
-
-### 扩展的选择性安装（`extensions-seed/` → `~/.pi/agent/extensions/`）
-
-`extensions-seed/manifest.json` 是受管扩展集合的**唯一真源**（id / 文件名 / 中文名 / 说明 / 是否默认勾选 / npm 依赖），驱动选择器 UI 与启动同步；`main.js` 里不再硬编码文件清单。
-
-| 场景 | 行为 |
-|---|---|
-| 首次启动（没有选择记录） | 弹出选择器并**阻塞**到用户确认，服务按选中的集合启动；关掉窗口＝这次啥也不装，下次启动再问 |
-| 菜单 `App → 扩展管理…` | 同一个窗口，可随时改勾选；应用后询问是否重启内嵌服务（或自行在 pi 里 `/reload`） |
-| 取消勾选 | **不删除**，重命名成 `<名>.ts.disabled`（pi 自己的停用约定，dashboard 也认这个）；重新勾回来时恢复的是**你那份**，不是内置版 |
-| 已装且未被改动 + 应用带来新版 | 静默升级 |
-| 已装且**被你改过** | 原样保留，仅标记「有新版可用」 |
-| 手动删掉某个已勾选的扩展 | 下次启动补装（想彻底不要就在选择器里取消勾选） |
-| 新版本新增的默认扩展 | 自动装上（纯新增文件，不会覆盖任何东西） |
-| 依赖 `node_modules` | 只在**有选中的扩展声明依赖**时才部署（目前只有 `mcp-bridge` 需要 `@modelcontextprotocol/client`，约 15MB），缺失或 lockfile 变化时刷新 |
-| 某个扩展从 manifest 里**移除**（退役） | 应用不再管它，但**也不会删**已经部署的那份——它会继续被 pi 加载。退役必须配一次手动清理，见下 |
-
-> [!WARNING]
-> **从 0.3.0 升级上来需要手动停用三个已退役扩展。** `agents-md-injector`、`claude-md-injector` 被 `context-file-injector` 取代，`variflight-web-search` 被 `web_search_tools` 取代；它们已从 `extensions-seed/` 和 manifest 里删除，但 `extensions-manager` 从不删除已部署的文件，所以老机器上旧文件仍会激活，和新扩展**同时**跑：目录上下文会被重复注入，`perplexity_*` 三个工具会被重复注册。
-> 升级后请到 `~/.pi/agent/extensions/` 把这三个 `.ts` 改名成 `.ts.disabled`（pi 自己的停用约定），或直接删掉：
->
-> ```
-> agents-md-injector.ts      -> agents-md-injector.ts.disabled
-> claude-md-injector.ts      -> claude-md-injector.ts.disabled
-> variflight-web-search.ts   -> variflight-web-search.ts.disabled
-> ```
->
-> 它们已不在 manifest 里，所以「扩展管理」窗口里看不到，只能手动改名。
-
-判定「改没改过」用的是**忽略换行符**的内容哈希（`core.autocrlf` 会把种子检出成 CRLF，纯换行差异不能算用户改动）。选择与部署记录写在 `userData/extensions-state.json`，`~/.pi` 里不留任何附加文件。实现见 `electron/features/extensions-manager.js`（策略注释在文件头）、`electron/extensions-picker.html`、`electron/extensions-preload.js`。
-
-### 内置的 13 个扩展
-
-| 扩展 | 作用 |
-|---|---|
-| `auto-session-title` | 自动生成会话标题 |
-| `claude-code-review` | **Claude 代码审查**：`claude_code_review` 工具把指定范围的改动（工作区／已暂存／整条分支／某次提交／指定文件）交给一个独立的 Claude Code 子进程（`claude -p` 非交互模式）做**只读**评审，结果以结构化 JSON 回来——整体 verdict + 逐条 findings（文件/行号/严重度/类别/说明/改法）+ 亮点与后续跟进项，不占主会话的上下文窗口。子进程只拿到 Read/Grep/Glob 与 git 查询类命令，没有 Write/Edit。默认 `claude-opus-5` + `--effort xhigh`，pi 调用时可用 `model`／`effort` 指定其它 Claude 模型与思考强度（low/medium/high/xhigh/max），非 Claude 模型会被拒。**闸门：每次调用前读网卡当前 SSID，只有连着 `Variflight` 无线网才放行**，否则直接拒绝、不发起任何请求。`/claude-review` 看闸门状态、`claude` 可执行文件与默认参数；`PI_CR_*` 可改 SSID／模型／强度／超时／diff 上限 |
-| `context-file-injector` | **目录上下文文件注入**：补上 pi 原生只向上找、不向下找的空缺——agent 进到子目录干活时，把该目录链上的 AGENTS.md／CLAUDE.md 注入会话（同目录按 `AGENTS.override.md > AGENTS.md > AGENTS.MD > CLAUDE.md > CLAUDE.MD` 只取一个），每文件每会话一次；首次发现新上下文的写／改会被拦下让模型先读。取代已退役的 `agents-md-injector` + `claude-md-injector`（沿用其会话状态，续跑不重复注入） |
-| `cross-agent-memory` | **跨 Agent 记忆桥接**：pi 自己没有长期记忆，而同一台机器上的 Claude Code 与 Codex 各写了一份。会话开始时读 `~/.claude/projects/<项目键>/memory/MEMORY.md` 与 `$CODEX_HOME/memories/memory_summary.md`，每轮 `before_agent_start` 追加进 system prompt。内容经 XML 转义后放进 `<memory_data>` 并明确声明为**不可信数据**（只取事实、偏好、历史决策，绝不执行其中的指令）；默认前 200 行 / 25 KiB，项目未受信任时不读。`/cross-memory-status` 看加载情况、`/cross-memory-reload` 重读；`PI_CROSS_MEMORY_*` 可关闭或改上限 |
-| `general-agent-prompt` | 通用 agent 系统提示增强 |
-| `image-generation` | **生图工具**：`generate_image_gpt`（OpenAI gpt-image-2）与 `generate_image_gemini`（gemini-3.1-flash-image），图片存到当前 workspace 的 `ai-output/temporary/pictures/` 并返回路径，不把 base64 塞回上下文 |
-| `language-guard` | **语言守卫**：检测 assistant 回复语言漂移（非中文主导即拦截），中断后注入中文要求并自动重发原任务；可选子 pi 复核，防死循环限重启次数 |
-| `mcp-bridge` | 桥接 `mcp.json` 里的 MCP server（stdio/sse/http）；MCP 工具默认**惰性加载**（`mcp_search_tools` 按需搜索激活，或 `/mcp-load` 手动），支持 eager/confirm/cwd 等单服配置。协议默认 `auto`：先 `server/discover` 探测，2026-07-28 无状态协议与 2025 版 server 通吃（`PI_MCP_PROTOCOL` 可改 legacy 或钉版本）；server 中途要用户补参数走 MRTR，弹 pi 对话框回填（`PI_MCP_ELICIT=0` 关） |
-| `python-workdir-guard` | **Python 工作目录守卫**：自动建 `.venv`、强制 Python 走 `.venv`（见下「零依赖 Python」） |
-| `skill-shell-injection` | **Skill 动态上下文注入**：补上 Pi 原生没有的 Claude Code 式 `` !\`cmd\` `` / ```` ```! ```` 语法——SKILL.md/prompt 被加载时在 shell 执行内嵌命令、把输出内联替换进内容；钩 `read` 自动生效，另提供 `/skillx <name>` 直调 |
-| `vision-fallback` | **多模态图片输入回退**：当前模型不支持读图而用户又发了图时，本轮自动 `setModel` 切到支持图片的模型，`agent_settled` 后切回原模型与思考级别 |
-| `web-search-tools` | **联网搜索**（四个互补工具，按成本分级，文件名 `web_search_tools.ts`）：`web_search`（免费，CPA 网关 Responses API + 内置 web_search，流式接收，返回带来源的结论）、`perplexity_search`（$0.005/次，结构化 ranked results）、`perplexity_pro_search`（$0.008/次 + token 费，Sonar Pro 多步深度检索）、`perplexity_async_sonar`（真异步 `/v1/async/sonar`，默认 `sonar-deep-research`，可跑十几分钟）；后两个每次调用前都要用户点确认。取代已退役的 `variflight-web-search`（首个工具由 `variflight_web_search` 更名为 `web_search`） |
-| `windows-encoding-guard` | **Windows 编码陷阱守卫**：`write`／`edit` 落盘前先重建「将要写入的完整内容」再做静态检查，两类致命项直接拦截——用 `[Console]::In` 读 stdin（按控制台 ANSI 代码页即 GBK 解码，中文用户名路径会吃掉 JSON 转义），以及剔除注释后的可执行代码里出现非 ASCII 但文件没有 UTF-8 BOM（powershell.exe 5.1 会按 GBK 读 BOM-less 的 `.ps1`）。其余为告警并注入下一轮。`/windows-encoding-audit [路径]` 可对单文件或整个目录递归体检；`PI_WINDOWS_ENCODING_GUARD=0` 关闭 |
-
-运行时 `@earendil-works/pi-coding-agent` 由 pi 注入扩展加载器，**不打包**；唯一需打包的依赖是 `@modelcontextprotocol/client`（MCP SDK v2，mcp-bridge 用），由 `npm run seed:extensions` 准备。
-
-### 默认技能（`skills-seed/` → `~/.pi/agent/skills/`）
-
-pi 自动发现 `~/.pi/agent/skills/` 下的技能，因此它们在**每个工作目录**都可用。`ensureBundledSkills()` 用每技能的 `.seed-version` 签名（`路径|大小|mtime` 的 md5，仅 stat 不读文件体）做快速跳过——内容没变就整跳过同步，避免 `ppt-master` 的上万文件每次启动深度比对。
-
-**OKF 知识库技能**（纯 Python 标准库，无 pip 依赖；把工作区文档编译成可移植的 [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) 知识库）：
-
-| 技能 | 作用 |
-|---|---|
-| `wiki-init` | 在工作区自举 `okf.config.json` + 空 bundle 骨架（先跑这个） |
-| `wiki-compile` | 扫描源文档 → 抽取概念 → 写概念文章 + 索引 + 术语表 |
-| `wiki-query` | 两跳索引导航 + 概念文章合成带引用的回答 |
-| `wiki-lint` | 一致性 / 新鲜度 / 覆盖度 / 关联 / 空白 / 尺寸 六类体检 |
-| `okf-visualizer` | 把知识库渲染成单文件、离线、自包含的 HTML 关系图谱 |
-
-> 两个方言由 `okf.config.json` 切换：`okf-pure`（默认，标准 markdown 链接，给任意编辑器/智能体用）与 `obsidian`（wikilink / callout / Dataview）。
-
-**`ppt-master`**（演示文稿生成）：把源文档（PDF/DOCX/URL/Markdown）通过多角色流水线生成高质量 SVG 页面并导出 PPTX。依赖较重（python-pptx / PyMuPDF / svglib / Pillow / numpy …），已**预装在内置 Python**，跑 `$PI_BUNDLED_PYTHON` 离线即用、零 pip。配图默认占位模式（无 API Key 也能出整套 deck）。
-
-### 零依赖 Python（守卫 + 内置 Python + ppt-master）
-
-让打包后的 app 跑 Python 技能做到「装完即用、离线零依赖」，靠三件套咬合：
-
-1. **内置 Python**（`vendor/python`）——可重定位的 python-build-standalone，ppt-master 依赖已预装。
-2. **`main.js` 注入**——把它前置到 pi 服务进程的 `PATH`，并设三个 `PI_PY_GUARD_*` / `PI_BUNDLED_PYTHON` 环境变量。
-3. **`python-workdir-guard` 守卫**——
-   - 用内置 Python 创建项目 `.venv`（**无需系统 Python**）；
-   - 放行内置解释器 `$PI_BUNDLED_PYTHON`，让 `ppt-master` 直接用它（重依赖现成）；
-   - **用户自己的项目 Python 代码仍被强制走干净的 `.venv`**（方案 B：技能依赖留在内置 Python 的 base，不污染项目 venv）。
-
-### 仪表盘 Sub-agents 模块读的是什么（`electron/features/subagents.js`）
-
-底栏「Sub-agents」磁贴显示**正在运行 / 本次完成**的子代理，点开是运行列表（可中止）与最近记录。两代子代理留下的痕迹完全不同，模块把两者读出来合并显示：
-
-| | **内置子代理**（pi-web ≥ 0.9.0，`Agent` / `get_subagent_result` / `steer_subagent`） | **`pi-subagents` npm 包**（旧，装了才读） |
-|---|---|---|
-| 运行形态 | Next.js 服务**进程内**的 AgentSession，**没有子进程** | spawn 子 `pi` 进程 |
-| 「正在运行」来源 | `GET /api/agent/running` 的 `runningSessionIds` ∩ 子代理会话文件 | 进程表里从服务 pid 派生的 `pi-coding-agent/dist/cli.js` |
-| 名称 / 任务 | 会话 JSONL 第二条 `customType:"pi-web:subagent"`（profile、description、task、前台/后台、父会话） | 提示词临时文件名 / async `status.json` |
-| 结束状态 | 末尾 `customType:"pi-web:subagent-result"`（completed / failed / aborted）；有元数据无结果且不在运行中 = **中断**（服务重启把它切掉了） | `~/.pi/agent/run-history.jsonl` |
-| 中止 | `POST /api/agent/<id> {type:"abort"}`（就是 pi-web 自己的 Stop，记为 aborted 并通知父会话），前面先 `GET` 确认还活着——对没有活 wrapper 的会话 POST 会让 pi-web **把它拉起来** | `taskkill /T` 整棵进程树（pi-subagents 的优雅中断在 Windows 上 ENOSYS） |
-
-- 开关状态从 `~/.pi/agent/agents/settings.json` 的 `builtInEnabled` 读（缺省/坏文件按关闭，与 pi-web 一致），关着时弹层直接提示去「设置 → Agents」开启，而不是显示一个空列表。
-- 中止请求的会话 id **只接受**当前扫描仍判定为子代理会话的那些，所以渲染层拿不到能中止主对话的口子；pid 同样要在新鲜的进程快照里仍是我们服务之下的 pi 进程。
-- 进程枚举（Windows 上是一次 PowerShell CIM 查询）只在 `pi-subagents` 确实安装时（`settings.json` 的 `packages` 或 `~/.pi/agent/npm/node_modules`）才跑；只用内置子代理的机器完全不碰进程表。
-- 元数据入口只扫 **mtime ≥ 本次启动**的会话文件：运行中的文件每条消息都会被改写，结束时又追加结果条目，所以这是「正在运行或本次结束」的精确前置过滤，不会把整个会话库读一遍。
-
-### 子智能体跑的是内置 pi（`PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT`，仅旧 `pi-subagents` 包相关）
-
-`pi-subagents` 起子智能体的方式是 **spawn 一个子 `pi` 进程**，而它找 pi 的顺序是：`PI_SUBAGENT_PI_BINARY` → 显式 package root → 探 `process.argv[1]` → 从自身安装位置 `import.meta.resolve`。桌面端两条自动路径**都会落空**：服务进程的 `argv[1]` 是 next 的 bin（不在 pi-coding-agent 目录下），而 `pi-subagents` 装在 `~/.pi/agent/npm`，那里的 `@earendil-works/` 是空的——桌面端从不往那儿 npm install pi。于是 `getPiSpawnCommand()` 兜底成裸 `"pi"`，**走 PATH 上全局安装的那个 pi**（本机实测：父进程 0.84.0，子智能体却是全局的 0.81.1），空电脑上则直接没有。
-
-所以 `main.js` 启动服务时注入：
-
-```
-PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT = <runtimeDir>/node_modules/@earendil-works/pi-coding-agent
-```
-
-`pi-subagents` 收到后自己会 `realpath` + 校验 `package.json.name`（`resolveExplicitPiPackageRoot`），校验不过就当没设——所以我们这边也先校验一次，不合格只记日志、不导出，让 PATH 兜底逻辑原样保留。命中后子智能体的启动命令变成 `<内置 node.exe> <内置 cli.js> …`：与父进程同版本 pi、同 node，继承同一份配置与模型认证，不依赖全局 pi / Node / npm。用 `runtimeDir()` 取值，所以运行时是就地跑还是被复制到 `%APPDATA%\Pi Agent\runtime` 都对。启动日志里的 `piPackageRoot=` 可核对，`(unresolved)` 就表示又退回 PATH 了。
-
-**自带的两个扩展也吃这个变量**：`auto-session-title`（起标题）和 `language-guard`（子 pi 复核）同样要 spawn 子 pi，原本也是裸 `"pi"` 走 PATH，同一个坑。两者现在共用同一条解析：环境变量在 → `process.execPath` + `<root>/dist/cli.js`；不在 → **原样回退到 PATH**，所以在终端里直接跑 `pi`（没有这个变量）时行为与改动前完全一致，扩展照常可用。`language-guard` 的 `LANG_GUARD_SUBPI_CMD` 若显式设了则优先级最高，`/lang-guard` 面板新增「复核用 pi」一行，起不来时第一眼就能看出走的是内置还是 PATH。
-
 ## 安装注意（首启是否秒开取决于安装目录）
 
 | 装到哪 | 可写? | 首启 |
@@ -232,18 +108,13 @@ mkdir runtime-seed; cd runtime-seed; npm init -y
 npm install @agegr/pi-web@latest --omit=dev --registry=https://registry.npmmirror.com
 cd ..
 
-# 2b. 默认扩展的共享依赖(13 个 .ts 扩展源码已入库;此步只装它们的 node_modules)
-npm run seed:extensions
-
 # 3. 内置 Node 运行时(win-x64) —— 全自动
-#    版本下限 22.19 由脚本强制(历史原因见脚本注释:当年为内置的 dsh 抬的,现已无强制需求但保留)
 npm run seed:node
 
-# 4. 内置 Python(win-x64,ppt-master 依赖预装,~340MB) —— 全自动
+# 4. 内置 Python(win-x64) —— 全自动
 npm run seed:python
 ```
 
-> `skills-seed/` 全部技能源码（含 `ppt-master`）已入库，**无需额外准备**。
 > 之后日常只需 `npm run seed` 把运行时种子升到最新发布版再打包。
 
 ## 开发 / 运行
@@ -266,7 +137,7 @@ npm start
 
 ## 打包安装程序
 
-确保图标产物已生成（`node build/_make_icons.js`），且 `vendor/node`（`npm run seed:node`）、`vendor/python`（`npm run seed:python`）、`runtime-seed`、`extensions-seed`（其 `node_modules` 跑 `npm run seed:extensions` 准备）已就绪，然后：
+确保图标产物已生成（`node build/_make_icons.js`），且 `vendor/node`（`npm run seed:node`）、`vendor/python`（`npm run seed:python`）、`runtime-seed` 已就绪，然后：
 
 ```bash
 npm run dist        # 生成 dist/Pi Setup x.x.x.exe (NSIS)
@@ -287,7 +158,7 @@ npm run dist:dir    # 仅生成解包目录(调试更快)
 | 归属 | 职责 | 改动流向 |
 |---|---|---|
 | **上游 [agegr/pi-web](https://github.com/agegr/pi-web)** | pi-web 网页端本身的功能/页面/接口 | 需要改 pi-web 时给上游提 PR → 上游合并发版 → 本项目 `runtime-seed` / 自更新从 npm 拉到 |
-| **本仓库 pi-web-desktop** | Electron 外壳：窗口、内置运行时、自更新、dashboard、IPC、默认扩展/技能、自定义能力 | 在 `electron/`、`extensions-seed/`、`skills-seed/` 改 → 重新打包安装程序 |
+| **本仓库 pi-web-desktop** | Electron 外壳：窗口、内置运行时、自更新、IPC、自定义能力 | 在 `electron/` 改 → 重新打包安装程序 |
 
 **两条铁律：**
 
@@ -302,7 +173,7 @@ npm run dist:dir    # 仅生成解包目录(调试更快)
 ### 分层与红线
 
 ```
-你拥有、随便改 ─┐  electron/ · extensions-seed/ · skills-seed/ · scripts/        ← 本仓库
+你拥有、随便改 ─┐  electron/ · scripts/                                  ← 本仓库
                 │
 pi-web 的功能  ─┤  给上游 agegr/pi-web 提 PR → 上游发版 @agegr/pi-web
                 │
@@ -311,7 +182,7 @@ pi-web 的功能  ─┤  给上游 agegr/pi-web 提 PR → 上游发版 @agegr/
 只读、不在此改 ─┘  resources/runtime-seed = @agegr/pi-web(npm 包) · ~/.pi 数据目录
 ```
 
-- ✅ **本仓库允许**：在 `electron/` 下加能力（Node 全权限）、加 IPC、加 preload API、加 UI；在 `extensions-seed/` 加默认扩展、`skills-seed/` 加默认技能。
+- ✅ **本仓库允许**：在 `electron/` 下加能力（Node 全权限）、加 IPC、加 preload API、加 UI。
 - ✅ **pi-web 的改动**：给上游提 PR，合并发版后这里通过升级 npm 包吃到。
 - ❌ **禁止**：在本仓库 / `runtime-seed` 里改 pi-web 源码或编译产物；fork、修改或内联 `@earendil-works/pi-coding-agent`。
 - 需要"后端能力"且不属于 pi-web 网页层时，放在 **Electron main 里用 IPC 暴露**（等价于你自己的后端）。
@@ -324,16 +195,15 @@ pi-web 的功能  ─┤  给上游 agegr/pi-web 提 PR → 上游发版 @agegr/
 
 ### 升级安全
 
-- 你的 `electron/`、`extensions-seed/`、`skills-seed/` 全在外壳层，自更新只换 `runtime-seed`，**碰不到**。
+- 你的 `electron/` 全在外壳层，自更新只换 `runtime-seed`，**碰不到**。
 - pi-web 的修复/功能走上游 PR；上游发版后 `npm run seed`（打包）或应用内「检查更新」（已装机器）即可跟进。
 
 ---
 
 ## 已知取舍
 
-- **安装包体积**：内置 Node + Python + 运行时种子 + 技能（含 ppt-master 图标库），约 **500MB+**；换来空电脑「装完即用、零依赖」。
+- **安装包体积**：内置 Node + Python + 运行时种子，约 **360MB**；换来空电脑「装完即用、零依赖」。
 - **只读目录安装首启较慢**（复制运行时种子，仅第一次）；可写目录安装则秒开。
-- **`ppt-master` 首次部署**约十几秒（上万文件），之后靠 `.seed-version` 签名秒级跳过。
 - **Python 仅 Windows x64**（与 `vendor/node` 一致）；mac/linux 暂未捆绑 Python。
-- **自更新粒度**是 pi-web 这一层；Electron 外壳（含扩展/技能/内置运行时）更新仍需重新发安装包。
+- **自更新粒度**是 pi-web 这一层；Electron 外壳（含内置运行时）更新仍需重新发安装包。
 - **定制受限**：不再持有 fork，pi-web 层的改动需上游接受 PR 才能获得（换来零同步维护成本；历史 Metro 定制版存于 `cking000bigdemon/pi-web`，已退役）。

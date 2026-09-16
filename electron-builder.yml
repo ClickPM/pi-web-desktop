@@ -46,26 +46,6 @@ extraResources:
       - "!**/*.map"
       - "!**/.cache/**"
 
-
-  # Bundled pi extensions (single-file .ts + manifest.json + shared deps) ->
-  # resources/extensions-seed. manifest.json catalogues the set; the first-run
-  # picker lets the user choose which ones get deployed into
-  # ~/.pi/agent/extensions/ (see electron/features/extensions-manager.js).
-  - from: extensions-seed
-    to: extensions-seed
-    filter:
-      - "**/*"
-      - "!**/*.map"
-  # Default OKF knowledge skills (wiki-init/compile/query/lint + okf-visualizer).
-  # Pure-stdlib Python; copied into ~/.pi/agent/skills/ on first run (see
-  # ensureBundledSkills in main.js). __pycache__ / *.pyc are excluded from the bundle.
-  - from: skills-seed
-    to: skills-seed
-    filter:
-      - "**/*"
-      - "!**/__pycache__/**"
-      - "!**/*.pyc"
-
 win:
   target:
     - nsis
