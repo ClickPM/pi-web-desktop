@@ -8,11 +8,7 @@
  * ships a prebuilt `.next` — so updating is a plain `npm install`, no compile.
  *
  * Every entry point takes the package name as an argument, defaulting to
- * pi-web's. That parameterisation was added when the shell also bundled
- * @deepseek-ai/dsh as a second runtime; that runtime is gone (DeepSeek Harness
- * is now upstream's own application, see features/dsh.js), so pi-web is once
- * again the only caller — but the argument stays, since it costs nothing and
- * is the seam a second bundled runtime would use again.
+ * pi-web's.
  *
  * All npm calls go through the BUNDLED node + npm so the target machine needs
  * nothing pre-installed.
@@ -106,15 +102,7 @@ function runNpm(ctx, args, opts = {}) {
 /**
  * Resolve the newest version `pkg` offers across `tags`.
  *
- * WHY THIS TAKES A TAG LIST — AND WHY NOBODY PASSES ONE TODAY. `npm view <pkg>
- * version` reads the `latest` dist-tag and nothing else. That is right for
- * pi-web, which publishes nothing else; it was wrong for @deepseek-ai/dsh,
- * whose developer previews land on `next` first and reach `latest` only later
- * (0.1.5-rc.1 sat on `next` alone for a week, until 2026-09-10), so an update
- * check reading `latest` could not see a build the shell had already bundled.
- *
- * The dsh runtime is gone — DeepSeek Harness is upstream's own application now
- * — so the only live caller is pi-web on the default `["latest"]`, i.e. exactly
+ * `npm view <pkg> version` reads the `latest` dist-tag by default.
  * the old behaviour. The list form is kept because it is the general rule and
  * because taking the MAXIMUM across tags is what makes a preview channel safe
  * in both directions: whenever a build is promoted to `latest`, that one wins

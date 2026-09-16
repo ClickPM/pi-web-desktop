@@ -1,6 +1,6 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">Pi Agent App Icon</title>
-  <desc id="desc">The Pi monogram tile, unchanged. Kept as its own asset because the app icon is now the combined Pi&amp;Dsh mark, while the pi-web WINDOW still identifies itself with this one.</desc>
+  <title id="title">Pi App Icon</title>
+  <desc id="desc">Pi official application icon.</desc>
   <defs>
     <linearGradient id="tileGradient" x1="188" y1="126" x2="836" y2="908" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#FBF8F1"/>

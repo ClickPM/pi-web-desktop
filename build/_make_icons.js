@@ -1,25 +1,13 @@
 /**
- * Rasterize the three icon SVGs in build/ into the PNG + ICO set electron and
+ * Rasterize the icon SVGs in build/ into the PNG + ICO set electron and
  * electron-builder consume.
  *
  *   icon.svg      -> icon.png / icon-512.png / icon-256.png / icon.ico
- *                    the APP identity (exe, installer, shortcut, launcher window)
+ *                    the APP identity (exe, installer, shortcut, main window)
  *   icon-pi.svg   -> icon-pi.png  / icon-pi.ico
- *                    the pi-web window, so choosing Pi shows the Pi mark
- *   icon-dsh.svg  -> icon-dsh.png / icon-dsh.ico
- *                    handed to the DeepSeek Harness build so the app we launch
- *                    carries its own mark instead of the default Electron one
- *
- * Replaces the older _make_icon.js + _make_ico.py pair, which between them
- * handled exactly one file with two hard-coded absolute paths.
+ *                    the Pi monogram tile
  *
  * Run:  node build/_make_icons.js        (from the repo root)
- *
- * sharp is BORROWED from the pi runtime seed rather than added as a dependency,
- * for the same reason js-yaml is (see features/pi-model-import.js): this shell
- * ships no runtime dependencies of its own. ICO assembly is hand-rolled — sharp
- * has no .ico encoder, and a PNG-compressed ICO is just a small header plus the
- * PNG bytes, which every Windows since Vista reads.
  */
 
 const path = require("path");
@@ -92,7 +80,6 @@ async function render(stem, { extraPngs = [] } = {}) {
 (async () => {
   await render("icon", { extraPngs: [512, 256] });
   await render("icon-pi");
-  await render("icon-dsh");
 })().catch((e) => {
   console.error("ICON BUILD FAILED:", (e && e.stack) || e);
   process.exit(3);

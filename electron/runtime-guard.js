@@ -247,15 +247,8 @@ function findNpmScratchDirs(nodeModulesDir) {
 }
 
 /**
- * Landmark files whose absence means the tree is not a usable runtime, keyed
- * by the runtime they describe. Paths are relative to `node_modules`.
- *
- * dsh's list is deliberately short: unlike pi-web (whose prebuilt `.next` is
- * the thing most likely to arrive half-written) dsh is plain JS plus prebuilt
- * native addons, and the native probe below covers those far better than any
- * file-existence check could. The frontend `dist` is listed because a dsh
- * install without it starts and then serves 404s — a failure that would
- * otherwise reach the user as a blank window.
+ * Landmark files whose absence means the tree is not a usable runtime.
+ * Paths are relative to `node_modules`.
  */
 const PI_WEB_REQUIRED_FILES = [
   { rel: ["next", "dist", "bin", "next"], label: "next CLI" },
@@ -280,11 +273,6 @@ async function verifyRuntime(ctx, dir) {
   const nm = path.join(dir, "node_modules");
 
   // --- structural checks (cheap, catch a wholesale-missing install) ---
-  // The landmark list stays injectable even though pi-web is once again the
-  // only bundled runtime: `ctx.requiredFiles` is what let this guard serve a
-  // second runtime (dsh, until its launch path moved to upstream's own
-  // application) without forking any of the surrounding machinery, and it is
-  // the seam any future one would use. The default is pi-web's.
   const required = ctx.requiredFiles || PI_WEB_REQUIRED_FILES;
   for (const { rel, label } of required) {
     const p = path.join(nm, ...rel);

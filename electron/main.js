@@ -23,17 +23,6 @@
  *    can never run at the same time.
  *  - The Next.js server is launched hidden (no console window) on a random
  *    127.0.0.1 port and shown in a native window.
- *  - DeepSeek Harness is the SECOND thing this shell can open, but it is no
- *    longer a runtime we embed: upstream ships its own Electron application,
- *    and App → DeepSeek Harness now hands off to it. features/dsh.js owns that
- *    (and the model import); this file only injects its context and adds the
- *    menu entries. See that module's header for why wrapping `dsh web`
- *    ourselves stopped making sense.
- *  - Because there are two targets, a launch STARTS with a chooser
- *    (launcher.html) unless a default is remembered. That has to come before
- *    any runtime work: a launch destined for dsh must not first seed, verify
- *    and start pi-web. bootPi() therefore holds what used to be boot()'s body,
- *    and boot() only decides.
  */
 
 const { app, BrowserWindow, Menu, shell, dialog, ipcMain } = require("electron");
@@ -50,7 +39,6 @@ const toolsFeature = require("./features/tools");
 const directoryPicker = require("./features/directory-picker");
 const extensionsManager = require("./features/extensions-manager");
 const nativeThemeSync = require("./features/native-theme");
-const dsh = require("./features/dsh");
 
 const isWindows = process.platform === "win32";
 const REGISTRY = process.env.PI_WEB_REGISTRY || "https://registry.npmmirror.com";
@@ -1223,13 +1211,8 @@ function createWindow() {
     minHeight: 600,
     backgroundColor: "#0A0A0A", // pi-web Metro dark canvas (--bg) — avoids a pre-paint flash
     autoHideMenuBar: true,
-    title: "Pi Agent",
-    // NOT the app icon. The app ships as "Pi Dsh" and its exe/shortcut carry
-    // the combined mark, but a WINDOW's icon is what Windows shows in the
-    // taskbar — so the running pi-web window identifies itself with the Pi
-    // mark alone, while the dsh choice starts a separate application that
-    // brings its own. The chooser keeps the combined one.
-    icon: path.join(__dirname, "..", "build", "icon-pi.png"),
+    title: "Pi",
+    icon: path.join(__dirname, "..", "build", "icon.png"),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -1242,7 +1225,7 @@ function createWindow() {
 
   // Keep the native window/taskbar title as the app name. The embedded pi-web
   // page sets its own <title> ("Pi Agent Web"); we don't let that propagate to
-  // the OS window so the shell consistently presents as "Pi Agent".
+  // the OS window so the shell consistently presents as "Pi".
   win.on("page-title-updated", (e) => e.preventDefault());
 
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -1279,78 +1262,22 @@ async function showError(err) {
 }
 
 // ---------------------------------------------------------------------------
-// Startup launcher — which runtime does this launch open?
+// User data migration across product renames
 // ---------------------------------------------------------------------------
-// The choice comes FIRST, before any pi runtime work, because that is the whole
-// point: a launch that ends up in dsh must not pay for seeding, verifying and
-// starting pi-web on the way there.
-let launcherWin = null;
-// Set while a chosen runtime is starting but its window may not exist yet, so
-// closing the launcher can never look like "the last window closed → quit".
-let launchInProgress = false;
-
-function launchPrefPath() {
-  return path.join(app.getPath("userData"), "launch-preference.json");
-}
-
-/** Remembered launch target, or null to ask. Unreadable/unknown values ask. */
-function readLaunchPref() {
-  try {
-    const raw = JSON.parse(fs.readFileSync(launchPrefPath(), "utf8").replace(/^﻿/, ""));
-    return raw.target === "pi" || raw.target === "dsh" ? raw.target : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeLaunchPref(target) {
-  try {
-    if (target === null) fs.rmSync(launchPrefPath(), { force: true });
-    else fs.writeFileSync(launchPrefPath(), JSON.stringify({ target, savedAt: new Date().toISOString() }, null, 2));
-    dbg(`launch preference -> ${target === null ? "ask every time" : target}`);
-  } catch (e) {
-    dbg(`could not persist launch preference: ${(e && e.message) || e}`);
-  }
-}
-
 /**
  * One-time state carry-over across product renames.
  *
- * Electron derives userData from productName, so every rename moves it and the
- * shell wakes up with no memory. This shell has been renamed twice — "Pi Agent"
- * -> "Pi&Dsh" -> "Pi Dsh" (the ampersand was dropped because electron-builder
- * only uses productName for the installation directory when it matches
- * /^[-_+0-9a-zA-Z .]+$/, and otherwise falls back to the package name, which
- * nested the install one level deeper).
- *
- * Most of what a rename loses is cosmetic. Two entries are not:
- *   - extensions-state.json — losing it re-runs the first-launch extension
- *     picker over a machine that already has extensions deployed;
- *   - dsh-model-import.json — losing it silently stops the PI_DSH_KEY_* env
- *     injection, so imported providers just fail to authenticate with no error
- *     pointing at the cause.
- *
- * LEGACY_USER_DATA_DIRS is ordered NEWEST FIRST and each file is taken from the
- * first directory that has it, because an intermediate name may hold state the
- * original never did (the Pi&Dsh directory is where anything written between
- * the two renames lives).
- *
- * Only this shell's OWN small JSON state is copied. Chromium's directories
- * (Cache, Local Storage, Preferences, ...) are deliberately left behind: they
- * are Electron's to recreate and carry absolute paths. `runtime/` is left
- * behind too — it is up to 1GB and is re-seeded on demand.
+ * Electron derives userData from productName ("Pi"), so previous builds
+ * ("Pi Agent", "Pi Dsh", "Pi&Dsh") stored userData in a different folder.
  *
  * Runs once; the marker is what stops it from resurrecting files the user has
  * since deleted on purpose.
  */
 function migrateLegacyUserData() {
-  const LEGACY_USER_DATA_DIRS = ["Pi&Dsh", "Pi Agent"];
+  const LEGACY_USER_DATA_DIRS = ["Pi Agent", "Pi Dsh", "Pi&Dsh"];
   const STATE_FILES = [
-    "launch-preference.json",
     "extensions-state.json",
     "theme-state.json",
-    "dsh-model-import.json",
-    "dsh-app-location.json",
   ];
   try {
     const now = app.getPath("userData");
@@ -1391,138 +1318,10 @@ function migrateLegacyUserData() {
   }
 }
 
-function openLauncher() {
-  launcherWin = new BrowserWindow({
-    width: 760,
-    height: 460,
-    resizable: false,
-    backgroundColor: "#0A0A0A",
-    autoHideMenuBar: true,
-    // The chooser is the APP, before either identity has been picked, so it
-    // is the one window that wears the combined mark and the product name.
-    title: "Pi Dsh",
-    icon: path.join(__dirname, "..", "build", "icon.png"),
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      preload: path.join(__dirname, "launcher-preload.js"),
-    },
-  });
-  launcherWin.loadFile(path.join(__dirname, "launcher.html"));
-  // Keep the OS window/taskbar title as the app name, like the main window.
-  launcherWin.on("page-title-updated", (e) => e.preventDefault());
-  launcherWin.on("closed", () => {
-    launcherWin = null;
-  });
-}
+/** AppUserModelID for the Windows taskbar and shortcuts. */
+const PI_APP_USER_MODEL_ID = "com.agegr.piwebdesktop";
 
-function closeLauncher() {
-  if (launcherWin && !launcherWin.isDestroyed()) launcherWin.close();
-  launcherWin = null;
-}
-
-ipcMain.handle("pi-web-desktop:launch-info", () => {
-  // Best-effort: a runtime that has not been seeded yet simply shows no version.
-  let piVersion = null;
-  try {
-    piVersion = updater.getInstalledVersion(runtimeDir());
-  } catch {
-    /* ignore */
-  }
-  let dshVersion = null;
-  try {
-    dshVersion = dsh.installedVersion();
-  } catch {
-    /* ignore */
-  }
-  return { piVersion, dshVersion };
-});
-
-/**
- * Start one runtime. The single path for every way a launch can be decided —
- * the launcher's tiles, a remembered preference, PI_DESKTOP_LAUNCH — so the
- * windowless-gap guard and the settle check below cannot apply to one route and
- * not another.
- */
-function launchTarget(pick) {
-  launchInProgress = true;
-  // bootPi() creates its window synchronously before its first await, so the
-  // launcher can go away immediately without a windowless gap. dsh.open()
-  // creates NO window of ours at all — it starts upstream's separate
-  // application — so this shell is left with nothing to show, and the settle
-  // check below is what turns that into a clean quit rather than a headless
-  // process. The launchInProgress guard covers the whole hand-off, including
-  // the "where is it installed?" dialog.
-  const started = pick === "dsh" ? dsh.open() : bootPi();
-  closeLauncher();
-  return started
-    .catch((e) => dbg(`launch ${pick} failed: ${(e && e.stack) || e}`))
-    .finally(() => {
-      launchInProgress = false;
-      // The guard suppresses window-all-closed for the whole start, not just
-      // the launcher gap — so a window closed WHILE its server was still
-      // booting (dsh's first run against a fresh $DSH_HOME takes tens of
-      // seconds) would otherwise leave the app running with no window and no
-      // way back in. Re-check once the launch has settled.
-      if (!app.isQuitting && BrowserWindow.getAllWindows().length === 0) {
-        dbg("launch settled with no window left — quitting");
-        app.isQuitting = true;
-        killAllServers();
-        app.quit();
-      }
-    });
-}
-
-ipcMain.on("pi-web-desktop:launch-choose", (_event, target, remember) => {
-  const pick = target === "dsh" ? "dsh" : "pi";
-  dbg(`launcher: chose ${pick}${remember ? " (remembered)" : ""}`);
-  if (remember) {
-    writeLaunchPref(pick);
-    Menu.setApplicationMenu(buildMenu()); // reflect the new default in the radio group
-  }
-  launchTarget(pick);
-});
-
-ipcMain.on("pi-web-desktop:launch-cancel", () => {
-  dbg("launcher dismissed — nothing was started, quitting");
-  app.isQuitting = true;
-  closeLauncher();
-  app.quit();
-});
-
-/**
- * Decide what this launch opens: a remembered default, an explicit
- * PI_DESKTOP_LAUNCH override (`pi` / `dsh` / `ask`, used by tests and shortcuts),
- * or the launcher window.
- */
 async function boot() {
-  const override = (process.env.PI_DESKTOP_LAUNCH || "").toLowerCase();
-  const remembered = readLaunchPref();
-  const target = override === "pi" || override === "dsh" ? override : override === "ask" ? null : remembered;
-  dbg(`boot: override=${override || "(none)"} remembered=${remembered || "(none)"} -> ${target || "ask"}`);
-  if (target === "dsh" || target === "pi") return launchTarget(target);
-  openLauncher();
-}
-
-/**
- * AppUserModelID for the pi runtime.
- *
- * WHY THIS EXISTS AT ALL. A BrowserWindow icon is NOT what Windows puts on the
- * taskbar button for an installed app: Windows associates the button with the
- * Start Menu shortcut that launched it and uses the SHORTCUT's icon, which is
- * the executable's — i.e. the combined Pi Dsh mark. That is why the per-window
- * icon shows up in the title bar and in a loose win-unpacked run, and silently
- * loses to the shortcut once the NSIS installer has created one.
- *
- * Declaring an id the shortcut does not carry breaks that association, so the
- * button falls back to the window icon. The cost is that a pi window no longer
- * groups under a pinned "Pi Dsh" shortcut — which is the honest outcome: it is
- * a different runtime, and the chooser (which keeps the default association)
- * is what represents the app.
- */
-const PI_APP_USER_MODEL_ID = "com.agegr.piwebdesktop.pi";
-
-async function bootPi() {
   if (win && !win.isDestroyed()) {
     if (win.isMinimized()) win.restore();
     win.focus();
@@ -1600,23 +1399,7 @@ if (!gotLock) {
     }
   });
   app.whenReady().then(() => {
-    // Before ANY read of shell state: the product rename moved userData, and
-    // boot() reads the remembered launch choice a few lines below.
     migrateLegacyUserData();
-
-    // The dsh feature is a HAND-OFF to upstream's own Electron application, not
-    // an embedded runtime (see features/dsh.js). It therefore needs almost
-    // nothing from this file: somewhere to look for the app, somewhere to
-    // remember a hand-picked location, and — for the model import alone — a way
-    // to borrow js-yaml from the pi runtime, which is now the only bundled
-    // runtime that carries it.
-    dsh.configure({
-      dbg,
-      debugLogPath: () => DEBUG_LOG,
-      resourcesBase,
-      userDataDir: () => app.getPath("userData"),
-      requireFromPiRuntime: (pkg) => require(path.join(runtimeDir(), "node_modules", pkg)),
-    });
     Menu.setApplicationMenu(buildMenu());
     boot();
     app.on("activate", () => {
@@ -1627,15 +1410,9 @@ if (!gotLock) {
 
 function killAllServers() {
   killServer();
-  // Nothing to do for dsh: since the switch to upstream's own application it is
-  // an independent process with its own single-instance lock. Quitting Pi Agent
-  // must NOT take down a DeepSeek Harness session the user is still working in.
 }
 
 app.on("window-all-closed", () => {
-  // The launcher closes a moment before (or after) the chosen runtime's window
-  // appears; quitting in that gap would kill the launch the user just asked for.
-  if (launchInProgress) return;
   app.isQuitting = true;
   killAllServers();
   app.quit();
@@ -1646,16 +1423,7 @@ app.on("before-quit", () => {
 });
 process.on("exit", killAllServers);
 
-/** Change the remembered launch target and re-check the radio group. */
-function setLaunchPref(target) {
-  writeLaunchPref(target);
-  Menu.setApplicationMenu(buildMenu());
-}
-
 function buildMenu() {
-  // Read once per build so the radio group shows what is actually on disk —
-  // including a change made from the launcher's "记住选择" checkbox.
-  const currentPref = readLaunchPref();
   const template = [
     {
       label: "App",
@@ -1668,46 +1436,6 @@ function buildMenu() {
           label: "扩展管理…",
           click: () => manageExtensions(),
         },
-        { type: "separator" },
-        {
-          label: "Pi Agent",
-          click: () => bootPi().catch((e) => dialog.showErrorBox("Pi Agent 启动失败", String(e))),
-        },
-        {
-          label: "DeepSeek Harness",
-          click: () => dsh.open().catch((e) => dialog.showErrorBox("DeepSeek Harness 启动失败", String(e))),
-        },
-        {
-          label: "启动时打开",
-          submenu: [
-            {
-              label: "每次询问",
-              type: "radio",
-              checked: currentPref === null,
-              click: () => setLaunchPref(null),
-            },
-            {
-              label: "Pi Agent",
-              type: "radio",
-              checked: currentPref === "pi",
-              click: () => setLaunchPref("pi"),
-            },
-            {
-              label: "DeepSeek Harness",
-              type: "radio",
-              checked: currentPref === "dsh",
-              click: () => setLaunchPref("dsh"),
-            },
-          ],
-        },
-        {
-          label: "从 Pi 导入模型配置…",
-          click: () => dsh.importPiModels(),
-        },
-        // No "检查 DeepSeek Harness 更新…" any more: upstream's application
-        // binds its Electron shell and its dsh release to one exact version and
-        // ships its own updater, so an update offered from here could only
-        // desynchronise the pair.
         { type: "separator" },
         {
           label: "重新加载",
