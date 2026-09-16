@@ -25,7 +25,7 @@
  *    127.0.0.1 port and shown in a native window.
  */
 
-const { app, BrowserWindow, Menu, shell, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, Menu, shell, dialog, ipcMain, protocol } = require("electron");
 const { spawn, spawnSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
@@ -35,6 +35,24 @@ const updater = require("./updater");
 const runtimeGuard = require("./runtime-guard");
 const directoryPicker = require("./features/directory-picker");
 const nativeThemeSync = require("./features/native-theme");
+const { DesktopHostProcess } = require("./host-process");
+
+const SCHEME = "pi-app";
+
+// Register pi-app as privileged scheme BEFORE app ready (same as DeepSeek Harness dsh-app)
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: SCHEME,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: false,
+      stream: true,
+      codeCache: true,
+    },
+  },
+]);
 
 const isWindows = process.platform === "win32";
 const REGISTRY = process.env.PI_WEB_REGISTRY || "https://registry.npmmirror.com";
@@ -409,140 +427,81 @@ async function ensureRuntimeHealthy() {
 }
 
 // ---------------------------------------------------------------------------
-// Server process management
+// Server process management (FD 3/4 Framed Byte Stream)
 // ---------------------------------------------------------------------------
-let serverProc = null;
+let hostProcess = null;
 let win = null;
-let serverUrl = null;
 let serverLog = "";
 
-function getFreePort() {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.unref();
-    srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const { port } = srv.address();
-      srv.close(() => resolve(port));
-    });
-  });
-}
+// Canonical application URL using the custom privileged scheme
+const APPLICATION_URL = `${SCHEME}://app/`;
 
-function waitForServer(url, timeoutMs = 60000) {
-  const start = Date.now();
-  return new Promise((resolve, reject) => {
-    const tryOnce = () => {
-      const req = http.get(url, (res) => {
-        res.resume();
-        resolve();
-      });
-      req.on("error", () => {
-        if (Date.now() - start > timeoutMs) reject(new Error("server not ready in time"));
-        else setTimeout(tryOnce, 300);
-      });
-      req.setTimeout(2500, () => req.destroy());
-    };
-    tryOnce();
-  });
-}
+// Register custom protocol handler to route all pi-app:// requests to FD 3/4
+protocol.handle(SCHEME, async (request) => {
+  if (!hostProcess) {
+    return new Response("Host bridge unavailable", { status: 503 });
+  }
+  try {
+    return await hostProcess.fetch(request);
+  } catch (err) {
+    dbg(`protocol fetch error: ${err.message}`);
+    return new Response(`Pipeline Error: ${err.message}`, { status: 502 });
+  }
+});
 
-function startServer(port) {
-  const nextBin = nextBinPath();
+function startServer() {
   const pkgDir = piWebPkgDir();
   const piAgentEnv = bundledPiAgentEnv();
+  const bridgeScript = path.join(__dirname, "host-bridge.js");
+
   dbg(
     `startServer node=${bundledNodeExe()} nodeExists=${fs.existsSync(bundledNodeExe())} ` +
-      `nextBin=${nextBin} nextExists=${fs.existsSync(nextBin)} pkgDir=${pkgDir} ` +
-      `nextDirExists=${fs.existsSync(path.join(pkgDir, ".next"))} port=${port} ` +
+      `bridgeScript=${bridgeScript} pkgDir=${pkgDir} ` +
+      `nextDirExists=${fs.existsSync(path.join(pkgDir, ".next"))} ` +
       `piPackageRoot=${piAgentEnv[PI_CODING_AGENT_PACKAGE_ROOT_ENV] || "(unresolved)"}`
   );
   if (!fs.existsSync(path.join(pkgDir, ".next"))) {
     throw new Error(`pi-web .next not found in runtime: ${pkgDir}`);
   }
-  serverProc = spawn(
-    bundledNodeExe(),
-    [nextBin, "start", "-p", String(port), "-H", "127.0.0.1"],
-    {
-      cwd: pkgDir,
-      env: {
-        ...process.env,
-        NODE_ENV: "production",
-        PORT: String(port),
-        HOSTNAME: "127.0.0.1",
-        // Prepend bundled node + bundled python dirs so agent tool subprocesses
-        // (node/npx, and python for the guard / ppt-master) resolve to the
-        // bundled runtimes. PI_* python hints are added when vendor/python ships.
-        PATH: [bundledNodeDir(), ...bundledPythonPathDirs(), process.env.PATH || ""]
-          .filter(Boolean)
-          .join(path.delimiter),
-        ...bundledPythonGuardEnv(),
-        // Subagents spawn the bundled pi, not whatever `pi` PATH happens to hold.
-        ...piAgentEnv,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-      detached: !isWindows,
-    }
-  );
 
-  const capture = (chunk) => {
-    const text = chunk.toString();
-    serverLog += text;
-    if (serverLog.length > 20000) serverLog = serverLog.slice(-20000);
-    dbg(`[server] ${text.replace(/\s+$/, "")}`);
-    process.stdout.write(`[pi-web] ${text}`);
-  };
-  serverProc.stdout.on("data", capture);
-  serverProc.stderr.on("data", capture);
-  serverProc.on("error", (e) => dbg(`server spawn ERROR ${e && e.message}`));
-  serverProc.on("exit", (code, signal) => {
-    dbg(`server exit code=${code} signal=${signal}`);
-    // Suppress the error popup for INTENTIONAL stops: app quit, a restart, or an
-    // update that kills the old server before reinstalling. Only a genuinely
-    // unexpected crash should alarm the user.
-    if (!app.isQuitting && !restarting && !stoppingForUpdate) {
-      dialog.showErrorBox(
-        "Pi Agent 服务已停止",
-        `内嵌服务意外退出 (code=${code}, signal=${signal})。\n\n最近输出:\n${serverLog.slice(-2000)}`
-      );
-    }
+  const nodeExe = fs.existsSync(bundledNodeExe()) ? bundledNodeExe() : process.execPath;
+
+  hostProcess = new DesktopHostProcess(nodeExe, bridgeScript, pkgDir, {
+    env: {
+      ...process.env,
+      NODE_ENV: "production",
+      PATH: [bundledNodeDir(), ...bundledPythonPathDirs(), process.env.PATH || ""]
+        .filter(Boolean)
+        .join(path.delimiter),
+      ...bundledPythonGuardEnv(),
+      ...piAgentEnv,
+    },
+    dbg,
   });
+
+  return hostProcess.start();
 }
 
 function killServer() {
-  if (!serverProc || serverProc.killed) return;
-  const pid = serverProc.pid;
+  if (!hostProcess) return;
   try {
-    if (isWindows) {
-      spawnSync("taskkill", ["/pid", String(pid), "/t", "/f"], { windowsHide: true });
-    } else {
-      try {
-        process.kill(-pid, "SIGTERM");
-      } catch {
-        process.kill(pid, "SIGTERM");
-      }
-    }
+    hostProcess.stop();
   } catch {
     /* ignore */
   }
-  serverProc = null;
+  hostProcess = null;
 }
 
 let restarting = false;
-// True while applyUpdate has intentionally stopped the server to reinstall, so
-// the server-exit handler doesn't mistake the deliberate kill for a crash.
 let stoppingForUpdate = false;
 async function startOrRestartServer() {
   restarting = true;
   killServer();
-  await new Promise((r) => setTimeout(r, 400)); // let file handles release
-  const port = await getFreePort();
-  serverUrl = `http://127.0.0.1:${port}`;
-  startServer(port);
-  await waitForServer(`${serverUrl}/`);
+  await new Promise((r) => setTimeout(r, 400));
+  await startServer();
   restarting = false;
-  if (win) win.loadURL(serverUrl);
-  console.log(`[pi-web-desktop] server up at ${serverUrl}`);
+  if (win) win.loadURL(APPLICATION_URL);
+  console.log(`[pi-web-desktop] server up via FD 3/4 framed pipe at ${APPLICATION_URL}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -784,7 +743,7 @@ function createWindow() {
   win.on("page-title-updated", (e) => e.preventDefault());
 
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith("http://127.0.0.1") || url.startsWith("http://localhost")) {
+    if (url.startsWith(`${SCHEME}:`) || url.startsWith("http://127.0.0.1") || url.startsWith("http://localhost")) {
       return { action: "allow" };
     }
     shell.openExternal(url);
@@ -793,8 +752,8 @@ function createWindow() {
 
   win.webContents.on("did-finish-load", () => {
     const cur = win && win.webContents.getURL();
-    if (serverUrl && cur && cur.startsWith(serverUrl)) {
-      console.log("[pi-web-desktop] window did-finish-load: pi-web UI rendered");
+    if (cur && cur.startsWith(APPLICATION_URL)) {
+      console.log("[pi-web-desktop] window did-finish-load: pi-web UI rendered via FD 3/4 pipeline");
       // Deliver any update-result CTA queued while the page was (re)loading —
       // e.g. the "更新完成" notice set right after an update reloads the server.
       flushUpdateNotice();
