@@ -8,11 +8,14 @@
  *  - Status codes with no body (204, 304, etc.)
  */
 class HttpResponseParser {
-  constructor(onStart, onData, onEnd, onError) {
+  constructor(onStart, onData, onEnd, onError, options = {}) {
     this.onStart = onStart;
     this.onData = onData;
     this.onEnd = onEnd;
     this.onError = onError;
+    // A HEAD response carries the headers of the GET response (Content-Length
+    // included) but never a body, so never wait for one.
+    this.forceNoBody = !!options.forceNoBody;
 
     this.state = "HEADER"; // HEADER, CHUNK_SIZE, CHUNK_DATA, CHUNK_CRLF, FIXED_BODY, DONE
     this.buffer = Buffer.alloc(0);
@@ -65,6 +68,7 @@ class HttpResponseParser {
 
           // Emit response start
           const hasNoBody =
+            this.forceNoBody ||
             this.statusCode === 204 ||
             this.statusCode === 304 ||
             (this.contentLength === 0 && !this.isChunked);

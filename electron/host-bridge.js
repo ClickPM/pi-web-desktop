@@ -24,7 +24,9 @@ const {
 
 class MemorySocket extends Duplex {
   constructor(peer) {
-    super();
+    // allowHalfOpen: an EOF on one direction must never auto-end the other, or the
+    // server half would close before it has written its response.
+    super({ allowHalfOpen: true });
     this.peer = peer;
     this.remoteAddress = "127.0.0.1";
     this.remotePort = 54321;
@@ -117,7 +119,7 @@ async function main() {
     if (frame.type === "start") {
       const { meta } = frame;
       const [clientSocket, serverSocket] = createSocketPair();
-      activeStreams.set(streamId, { clientSocket });
+      activeStreams.set(streamId, { clientSocket, serverSocket });
 
       let parsedUrl;
       try {
@@ -129,7 +131,7 @@ async function main() {
       const method = (meta.method || "GET").toUpperCase();
 
       // Hook up clientSocket reading to parse HTTP response and emit FD 4 frames
-      setupResponseConsumer(streamId, clientSocket);
+      setupResponseConsumer(streamId, clientSocket, method === "HEAD");
 
       // Connect serverSocket to Next.js HTTP server
       server.emit("connection", serverSocket);
@@ -137,15 +139,23 @@ async function main() {
       // Construct and send raw HTTP/1.1 request into clientSocket
       let rawHeader = `${method} ${requestPath} HTTP/1.1\r\n`;
       let hasHost = false;
+      let hasContentLength = false;
+      let hasTransferEncoding = false;
 
       if (Array.isArray(meta.headers)) {
         for (const [k, v] of meta.headers) {
-          if (k.toLowerCase() === "host") hasHost = true;
+          const lk = k.toLowerCase();
+          if (lk === "host") hasHost = true;
+          if (lk === "content-length") hasContentLength = true;
+          if (lk === "transfer-encoding") hasTransferEncoding = true;
           rawHeader += `${k}: ${v}\r\n`;
         }
       } else if (meta.headers && typeof meta.headers === "object") {
         for (const [k, v] of Object.entries(meta.headers)) {
-          if (k.toLowerCase() === "host") hasHost = true;
+          const lk = k.toLowerCase();
+          if (lk === "host") hasHost = true;
+          if (lk === "content-length") hasContentLength = true;
+          if (lk === "transfer-encoding") hasTransferEncoding = true;
           rawHeader += `${k}: ${v}\r\n`;
         }
       }
@@ -153,7 +163,14 @@ async function main() {
       if (!hasHost) {
         rawHeader += "Host: localhost\r\n";
       }
+
+      const isChunked = !!meta.hasBody && !hasContentLength && !hasTransferEncoding;
+      if (isChunked) {
+        rawHeader += "Transfer-Encoding: chunked\r\n";
+      }
       rawHeader += "\r\n";
+
+      activeStreams.set(streamId, { clientSocket, serverSocket, isChunked });
 
       clientSocket.write(rawHeader);
       return;
@@ -162,7 +179,14 @@ async function main() {
     if (frame.type === "data") {
       const active = activeStreams.get(streamId);
       if (active && active.clientSocket.writable) {
-        active.clientSocket.write(frame.data);
+        if (active.isChunked) {
+          const sizeHex = frame.data.length.toString(16);
+          active.clientSocket.write(`${sizeHex}\r\n`);
+          active.clientSocket.write(frame.data);
+          active.clientSocket.write("\r\n");
+        } else {
+          active.clientSocket.write(frame.data);
+        }
       }
       return;
     }
@@ -170,22 +194,38 @@ async function main() {
     if (frame.type === "end") {
       const active = activeStreams.get(streamId);
       if (active && active.clientSocket.writable) {
-        active.clientSocket.end();
+        if (active.isChunked) {
+          // Terminal chunk ends the request body. Do NOT end the socket here: a real
+          // HTTP client keeps the connection open while the server writes its response.
+          active.clientSocket.write("0\r\n\r\n");
+        }
       }
       return;
     }
 
     if (frame.type === "cancel") {
-      const active = activeStreams.get(streamId);
-      if (active) {
-        active.clientSocket.destroy();
-        activeStreams.delete(streamId);
-      }
+      closeStream(streamId);
       return;
     }
   }
 
-  function setupResponseConsumer(streamId, clientSocket) {
+  function closeStream(streamId) {
+    const active = activeStreams.get(streamId);
+    if (!active) return;
+    activeStreams.delete(streamId);
+    try {
+      active.clientSocket.destroy();
+    } catch {
+      /* ignore */
+    }
+    try {
+      active.serverSocket?.destroy();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function setupResponseConsumer(streamId, clientSocket, forceNoBody) {
     const parser = new HttpResponseParser(
       // onStart
       async (status, headers, hasBody) => {
@@ -205,15 +245,14 @@ async function main() {
       // onEnd
       async () => {
         await writeResponse(encodeResponseEnd(streamId));
-        clientSocket.destroy();
-        activeStreams.delete(streamId);
+        closeStream(streamId);
       },
       // onError
       async (err) => {
         await writeResponse(encodeResponseError(streamId, err.message));
-        clientSocket.destroy();
-        activeStreams.delete(streamId);
-      }
+        closeStream(streamId);
+      },
+      { forceNoBody }
     );
 
     clientSocket.on("data", (chunk) => {
@@ -222,12 +261,12 @@ async function main() {
 
     clientSocket.once("end", () => {
       parser.finish();
-      activeStreams.delete(streamId);
+      closeStream(streamId);
     });
 
     clientSocket.once("error", (err) => {
       parser.onError(err);
-      activeStreams.delete(streamId);
+      closeStream(streamId);
     });
   }
 

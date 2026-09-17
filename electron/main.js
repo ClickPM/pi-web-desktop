@@ -21,8 +21,9 @@
  *    starting the server, and repairs a torn install through that same atomic
  *    path. Both entry points share one lock, so a self-heal and an update check
  *    can never run at the same time.
- *  - The Next.js server is launched hidden (no console window) on a random
- *    127.0.0.1 port and shown in a native window.
+ *  - The Next.js server is launched hidden (no console window) and listens on no
+ *    TCP port at all: requests reach it over the FD 3/4 framed byte stream (see
+ *    host-process.js), routed there by the privileged pi-app:// scheme.
  */
 
 const { app, BrowserWindow, Menu, shell, dialog, ipcMain, protocol } = require("electron");

@@ -18,6 +18,9 @@ const {
   encodeRequestCancel,
 } = require("./host-protocol");
 
+// Statuses the Fetch spec forbids a body on.
+const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
+
 class DesktopHostProcess {
   constructor(executable, bridgeScript, pkgDir, options = {}) {
     this.executable = executable;
@@ -186,7 +189,17 @@ class DesktopHostProcess {
 
     if (frame.type === "start") {
       pending.started = true;
-      const { status, headers } = frame.meta;
+      const { status, headers, hasBody } = frame.meta;
+
+      // 204/205/304 and friends must be constructed with a null body, or the
+      // Response constructor throws and the request would hang forever.
+      const nullBody = hasBody === false || NULL_BODY_STATUSES.has(status);
+      if (nullBody) {
+        pending.resolve(
+          new Response(null, { status, headers: new Headers(headers) })
+        );
+        return;
+      }
 
       const bodyStream = new ReadableStream({
         start: (controller) => {

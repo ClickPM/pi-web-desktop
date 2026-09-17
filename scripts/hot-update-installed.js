@@ -87,10 +87,15 @@ async function main() {
   }
 
   // 清理 bridge 磁盘缓存以便重新释放
-  const bridgeCache = path.join(process.env.APPDATA, "pi-web-desktop", "bridge");
-  if (fs.existsSync(bridgeCache)) {
-    fs.rmSync(bridgeCache, { recursive: true });
-    console.log(`已重置旧桥接脚本缓存: ${bridgeCache}`);
+  const possibleBridgeCaches = [
+    path.join(process.env.APPDATA, "Pi", "bridge"),
+    path.join(process.env.APPDATA, "pi-web-desktop", "bridge"),
+  ];
+  for (const bridgeCache of possibleBridgeCaches) {
+    if (fs.existsSync(bridgeCache)) {
+      fs.rmSync(bridgeCache, { recursive: true });
+      console.log(`已重置旧桥接脚本缓存: ${bridgeCache}`);
+    }
   }
 
   console.log("\n>>> 本地安装版热更成功完成！<<<");
