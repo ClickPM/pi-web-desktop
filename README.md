@@ -3,22 +3,26 @@
 把 [pi-web](https://github.com/agegr/pi-web)（pi 编程智能体的网页界面，npm 包 **`@agegr/pi-web`**）打包成一个**开箱即用的桌面应用**：
 双击即用，没有浏览器、没有地址栏、没有常驻终端窗口，**目标机器无需预装任何运行时**。
 
-它不只是「pi-web 套壳」——而是一台**电池全含的 AI 工作站**：内置 Node 与 Python 两套运行时，拷到空电脑双击即可使用。
+它不只是「pi-web 套壳」——而是一台**开箱即用的 AI 桌面工作站**：内置独立 Node 运行时，拷到空电脑双击即可使用。
 
 **核心特性**
-- 🧳 **内置 Node + Python 运行时** —— 目标机器无需 Node/npm/Python，拷到空电脑双击即用。
+- 🧳 **内置 Node.js 运行时** —— 目标机器无需 Node/npm，拷到空电脑双击即用。
 - ⚡ **就地运行，首启秒开** —— 直接从（可写的）安装目录跑 pi-web，不做首启复制。
 - 🔄 **运行时自更新** —— App 内「检查更新」直接装 `@agegr/pi-web@latest`（npm 包自带预构建 `.next`，免编译），独立更新 pi-web + pi-coding-agent，**无需重新发版、不碰外壳代码**。安装走 **staging + 校验通过才原子换入**，更新失败/断网/中途被杀都不会损坏正在用的运行时。
 - 🩺 **启动自检与自愈** —— 每次启动先验证运行时的原生模块是否真的能加载；发现是安装被中断留下的残缺文件，自动按锁定版本重装修复（不趁机升级），而不是让用户对着 `server not ready in time` 干瞪眼。
-- 🐍 **零依赖 Python 环境** —— 内置 Python 支持离线工具与脚本；环境守卫强制用户项目走干净的 `.venv`。
-- 🪟 **原生窗口** —— 内嵌 Next.js 服务隐藏运行在随机 `127.0.0.1` 端口，关窗即停。
+- 🛡️ **无网络端口管道化通信** —— 1:1 复刻 DeepSeek Harness 架构，通过 FD 3/4 匿名字节分帧管道与 `pi-app://` 特权协议直连 Next.js，整机**完全不开放任何 127.0.0.1 端口**，高安全、免端口冲突。
+- 🪟 **原生窗口** —— 关窗即停，进程树彻底回收无残留。
 
 ## 目录结构
 
 ```
 pi-web-desktop/
 ├── electron/
-│   ├── main.js         # 主进程:解析运行时、起内置 node 服务、开窗、检查更新、注入 Python 环境、退出清理
+│   ├── main.js         # 主进程:解析运行时、起内置 node 服务、注册 pi-app:// 协议、开窗、检查更新、退出清理
+│   ├── host-bridge.js  # 无头 Next.js 宿主桥接器:零端口监听，通过 MemorySocket 双工流直驱 Next.js
+│   ├── host-process.js # 进程管道控制器:管理子进程生命周期，基于 FD 3/4 承载二进制分帧流
+│   ├── host-protocol.js # 二进制分帧协议编解码器 (魔数 0x44534833)
+│   ├── http-response-parser.js # HTTP/1.1 响应解析状态机:精准处理 chunked 与 content-length
 │   ├── updater.js      # npm 层:用内置 npm 查询版本 / 装到指定目录(installInto)
 │   ├── runtime-guard.js # 运行时完整性:启动校验、staging 安装、原子换入、崩溃恢复
 │   ├── preload.js      # 最小安全桥(contextIsolation 开启)—— 自定义能力的暴露入口
@@ -26,11 +30,11 @@ pi-web-desktop/
 │   ├── loading.html / updating.html / healing.html / error.html
 │   └── ui/             # ★ 自定义能力的前端页面(可选,见「开发约束」)
 ├── vendor/node/        # 内置 Node.js 运行时(node.exe + npm) → resources/node            ← 构建输入(npm run seed:node)
-├── vendor/python/      # 内置 Python(python-build-standalone) → resources/python        ← 构建输入(npm run seed:python)
 ├── runtime-seed/       # @agegr/pi-web 的 npm 生产安装(含 .next) → resources/runtime-seed ← 构建输入(npm run seed)
 ├── scripts/            # seed-node.ps1(供给 vendor/node)
-│                       # + seed-python.ps1 + vendor-python-requirements.txt(供给 vendor/python)
 │                       # + test-runtime-guard.js(运行时守卫 / 版本比较回归测试,npm run test:guard)
+│                       # + test-framed-pipeline.js(FD 3/4 管道端到端并发测试)
+│                       # + hot-update-installed.js(一键热更本地已安装客户端)
 ├── build/              # 应用图标的 SVG 源 + 生成脚本(_make_icons.js)与产物(png/ico)
 ├── electron-builder.yml
 └── package.json
@@ -64,10 +68,9 @@ pi-web-desktop/
 3. **同步默认扩展与技能**（启动时，非阻塞、失败不挡启动）：
    - 扩展：**首次启动弹选择器**让用户勾选装哪些，之后每次启动做**非破坏性同步**（不覆盖用户改过的文件），见下「内置的扩展与技能」；
    - `ensureBundledSkills()` 把技能同步进 `~/.pi/agent/skills/`（见下「内置的扩展与技能」）。
-4. **注入 Python 环境**：spawn pi 服务时，把 `vendor/python` 前置到 `PATH` 并设 `PI_BUNDLED_PYTHON` / `PI_PY_GUARD_PYTHON` / `PI_PY_GUARD_BUNDLED_PYTHON`，供环境守卫与 `ppt-master` 使用。
-5. **启动服务**：用 `resources/node/node.exe` 跑 `next start`，绑定 `127.0.0.1` 随机空闲端口，隐藏窗口、无控制台。
-6. **加载窗口**：轮询服务就绪后 `loadURL` 到该端口。
-7. **检查更新**（菜单 `App → 检查更新…`，或启动后自动静默检查）：用内置 npm `view` 对比版本，有新版则**原子安装**：
+4. **启动服务**：用 `resources/node/node.exe` 启动无头 `host-bridge.js`，通过 FD 3/4 匿名字节管道与 `pi-app://` 协议流式直连，完全不监听任何 TCP 端口。
+5. **加载窗口**：服务就绪后直接加载 `pi-app://app/`。
+6. **检查更新**（菜单 `App → 检查更新…`，或启动后自动静默检查）：用内置 npm `view` 对比版本，有新版则**原子安装**：
    - 装进兄弟目录 `.runtime-seed.staging`（同卷，保证 rename 是原子移动），**期间旧服务照常运行**；
    - 用与第 2 步**完全相同**的校验做验收，不通过就丢弃 staging，线上运行时**一字节不动**；
    - 通过后才停服务 → `rename` 换入（失败自动回滚）→ 重启服务并刷新窗口。
@@ -91,9 +94,8 @@ pi-web-desktop/
 
 ## 目标机器需要装什么?
 
-- **不需要 Node / npm / Python**（已全部内置）。
+- **不需要 Node / npm**（已全部内置）。
 - 需要在 App 内配置一个**模型提供商的 API Key**（侧边栏 Models / 登录面板）才能真正对话；空机器首次没有任何凭证。
-- `ppt-master` 的 **AI 配图**需要 provider key（默认占位模式，无 key 也能出 deck；要真配图，复制技能内 `.env.example` 到 `~/.ppt-master/.env` 填 key）。
 - 更新功能、首次模型调用、联网取数需要**联网**。
 - 仅 **Windows x64**（内置运行时为 win-x64）；未签名，SmartScreen 提示「未知发布者」点「仍要运行」。
 
@@ -110,9 +112,6 @@ cd ..
 
 # 3. 内置 Node 运行时(win-x64) —— 全自动
 npm run seed:node
-
-# 4. 内置 Python(win-x64) —— 全自动
-npm run seed:python
 ```
 
 > 之后日常只需 `npm run seed` 把运行时种子升到最新发布版再打包。
@@ -137,7 +136,7 @@ npm start
 
 ## 打包安装程序
 
-确保图标产物已生成（`node build/_make_icons.js`），且 `vendor/node`（`npm run seed:node`）、`vendor/python`（`npm run seed:python`）、`runtime-seed` 已就绪，然后：
+确保图标产物已生成（`node build/_make_icons.js`），且 `vendor/node`（`npm run seed:node`）、`runtime-seed` 已就绪，然后：
 
 ```bash
 npm run dist        # 生成 dist/Pi Setup x.x.x.exe (NSIS)
@@ -177,7 +176,7 @@ npm run dist:dir    # 仅生成解包目录(调试更快)
                 │
 pi-web 的功能  ─┤  给上游 agegr/pi-web 提 PR → 上游发版 @agegr/pi-web
                 │
-内置运行时     ─┤  resources/node · resources/python
+内置运行时     ─┤  resources/node
                 │
 只读、不在此改 ─┘  resources/runtime-seed = @agegr/pi-web(npm 包) · ~/.pi 数据目录
 ```
@@ -202,8 +201,7 @@ pi-web 的功能  ─┤  给上游 agegr/pi-web 提 PR → 上游发版 @agegr/
 
 ## 已知取舍
 
-- **安装包体积**：内置 Node + Python + 运行时种子，约 **360MB**；换来空电脑「装完即用、零依赖」。
+- **安装包体积**：精简 Python 后的安装包仅 **约 80MB**（大幅瘦身近 80%）；换来空电脑「装完即用、零依赖」。
 - **只读目录安装首启较慢**（复制运行时种子，仅第一次）；可写目录安装则秒开。
-- **Python 仅 Windows x64**（与 `vendor/node` 一致）；mac/linux 暂未捆绑 Python。
 - **自更新粒度**是 pi-web 这一层；Electron 外壳（含内置运行时）更新仍需重新发安装包。
 - **定制受限**：不再持有 fork，pi-web 层的改动需上游接受 PR 才能获得（换来零同步维护成本；历史 Metro 定制版存于 `cking000bigdemon/pi-web`，已退役）。

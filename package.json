@@ -10,7 +10,6 @@
     "start": "electron .",
     "seed": "cd runtime-seed && npm install @agegr/pi-web@latest --omit=dev --registry=https://registry.npmmirror.com",
     "seed:node": "powershell -ExecutionPolicy Bypass -File scripts/seed-node.ps1",
-    "seed:python": "powershell -ExecutionPolicy Bypass -File scripts/seed-python.ps1",
     "dist": "electron-builder",
     "dist:dir": "electron-builder --dir",
     "test:guard": "node scripts/test-runtime-guard.js"

@@ -90,43 +90,6 @@ function bundledNodeExe() {
 function bundledNpmCli() {
   return path.join(bundledNodeDir(), "node_modules", "npm", "bin", "npm-cli.js");
 }
-// Bundled relocatable Python (python-build-standalone, ppt-master deps
-// pre-installed). packaged: resources/python ; dev: vendor/python.
-function bundledPythonDir() {
-  return app.isPackaged
-    ? path.join(process.resourcesPath, "python")
-    : path.join(__dirname, "..", "vendor", "python");
-}
-function bundledPythonExe() {
-  // install_only Windows build keeps python.exe at the dir root.
-  return path.join(bundledPythonDir(), isWindows ? "python.exe" : "bin/python3");
-}
-// PATH dirs to prepend so the bundled python + its console scripts resolve.
-// Empty when the bundled Python is absent (dev before `npm run seed:python`).
-function bundledPythonPathDirs() {
-  const exe = bundledPythonExe();
-  if (!fs.existsSync(exe)) return [];
-  const pyDir = bundledPythonDir();
-  return [pyDir, path.join(pyDir, isWindows ? "Scripts" : "bin")];
-}
-// Env vars that wire the bundled Python into the pi server's environment so the
-// python-workdir-guard extension can (a) create project .venvs FROM it (zero
-// system-Python dependency) and (b) allowlist it for app-bundled skills like
-// ppt-master — while still forcing the user's own project code through .venv.
-// Returns {} when the bundled Python is absent so the guard cleanly falls back
-// to a system Python.
-function bundledPythonGuardEnv() {
-  const exe = bundledPythonExe();
-  if (!fs.existsSync(exe)) return {};
-  return {
-    // Read by ppt-master's SKILL.md to invoke its scripts on the bundled python.
-    PI_BUNDLED_PYTHON: exe,
-    // python-workdir-guard: interpreter to create project .venv from.
-    PI_PY_GUARD_PYTHON: exe,
-    // python-workdir-guard: extra interpreter treated as venv-compliant.
-    PI_PY_GUARD_BUNDLED_PYTHON: exe,
-  };
-}
 function seedDir() {
   return path.join(resourcesBase(), app.isPackaged ? "runtime-seed" : "runtime-seed");
 }
@@ -504,10 +467,9 @@ function startServer() {
     env: {
       ...process.env,
       NODE_ENV: "production",
-      PATH: [bundledNodeDir(), ...bundledPythonPathDirs(), process.env.PATH || ""]
+      PATH: [bundledNodeDir(), process.env.PATH || ""]
         .filter(Boolean)
         .join(path.delimiter),
-      ...bundledPythonGuardEnv(),
       ...piAgentEnv,
     },
     dbg,

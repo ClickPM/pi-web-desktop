@@ -25,19 +25,6 @@ extraResources:
   # Bundled Node.js runtime (node.exe + npm) -> resources/node
   - from: vendor/node
     to: node
-  # Bundled relocatable Python (python-build-standalone + ppt-master deps
-  # pre-installed) -> resources/python. Provisioned by `npm run seed:python`.
-  # Wired into the pi server env in main.js so the venv guard creates project
-  # .venvs from it (zero system-Python dependency) and ppt-master runs on it
-  # offline (zero runtime pip install). Strip caches/test noise to trim size.
-  - from: vendor/python
-    to: python
-    filter:
-      - "**/*"
-      - "!**/__pycache__/**"
-      - "!**/*.pyc"
-      - "!**/test/**"
-      - "!**/tests/**"
   # pi-web runtime seed (npm prod install of @agegr/pi-web) -> resources/runtime-seed
   - from: runtime-seed
     to: runtime-seed

@@ -23,6 +23,14 @@ async function main() {
     throw new Error(`未找到安装目录中的 app.asar: ${ASAR_PATH}`);
   }
 
+  // 0. 关闭运行中的 Pi.exe，释放 app.asar 占用
+  try {
+    const { execSync } = require("child_process");
+    execSync("taskkill /f /im Pi.exe", { stdio: "ignore" });
+    console.log("[0/5] 已关闭正在运行的 Pi.exe 释放文件锁");
+    await new Promise((r) => setTimeout(r, 800));
+  } catch {}
+
   // 1. 备份原 app.asar（如果还没有备份的话）
   if (!fs.existsSync(BACKUP_PATH)) {
     console.log(`[1/5] 备份原 app.asar -> ${BACKUP_PATH}`);
