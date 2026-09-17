@@ -437,17 +437,19 @@ let serverLog = "";
 const APPLICATION_URL = `${SCHEME}://app/`;
 
 // Register custom protocol handler to route all pi-app:// requests to FD 3/4
-protocol.handle(SCHEME, async (request) => {
-  if (!hostProcess) {
-    return new Response("Host bridge unavailable", { status: 503 });
-  }
-  try {
-    return await hostProcess.fetch(request);
-  } catch (err) {
-    dbg(`protocol fetch error: ${err.message}`);
-    return new Response(`Pipeline Error: ${err.message}`, { status: 502 });
-  }
-});
+function registerProtocolHandler() {
+  protocol.handle(SCHEME, async (request) => {
+    if (!hostProcess) {
+      return new Response("Host bridge unavailable", { status: 503 });
+    }
+    try {
+      return await hostProcess.fetch(request);
+    } catch (err) {
+      dbg(`protocol fetch error: ${err.message}`);
+      return new Response(`Pipeline Error: ${err.message}`, { status: 502 });
+    }
+  });
+}
 
 function ensureBridgeOnDisk() {
   if (!app.isPackaged) {
@@ -922,6 +924,7 @@ if (!gotLock) {
     }
   });
   app.whenReady().then(() => {
+    registerProtocolHandler();
     migrateLegacyUserData();
     Menu.setApplicationMenu(buildMenu());
     boot();
