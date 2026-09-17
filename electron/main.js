@@ -449,10 +449,42 @@ protocol.handle(SCHEME, async (request) => {
   }
 });
 
+function ensureBridgeOnDisk() {
+  if (!app.isPackaged) {
+    return path.join(__dirname, "host-bridge.js");
+  }
+
+  // When packaged (running inside app.asar), extract bridge files to disk
+  // so that bundledNodeExe() can execute them cleanly without needing asar support.
+  const bridgeDir = path.join(app.getPath("userData"), "bridge");
+  fs.mkdirSync(bridgeDir, { recursive: true });
+
+  const bridgeFiles = [
+    "host-bridge.js",
+    "host-protocol.js",
+    "http-response-parser.js",
+  ];
+
+  for (const file of bridgeFiles) {
+    const src = path.join(__dirname, file);
+    const dst = path.join(bridgeDir, file);
+    try {
+      const content = fs.readFileSync(src);
+      if (!fs.existsSync(dst) || fs.readFileSync(dst).compare(content) !== 0) {
+        fs.writeFileSync(dst, content);
+      }
+    } catch (e) {
+      dbg(`ensureBridgeOnDisk error syncing ${file}: ${e && e.message}`);
+    }
+  }
+
+  return path.join(bridgeDir, "host-bridge.js");
+}
+
 function startServer() {
   const pkgDir = piWebPkgDir();
   const piAgentEnv = bundledPiAgentEnv();
-  const bridgeScript = path.join(__dirname, "host-bridge.js");
+  const bridgeScript = ensureBridgeOnDisk();
 
   dbg(
     `startServer node=${bundledNodeExe()} nodeExists=${fs.existsSync(bundledNodeExe())} ` +
